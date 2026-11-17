@@ -78,7 +78,7 @@ impl fmt::Display for Error {
             Error::NoSession => write!(f, "Riot Client'ta açık bir oturum yok."),
             Error::NotPersisted => write!(
                 f,
-                "Bu oturum \"Oturumu açık tut\" işaretlenmeden açılmış, saklanacak bir şey yok. Çıkış yapıp kutuyu işaretleyerek tekrar gir ya da hesabı şifreyle ekle."
+                "Riot Client kapandığında saklanacak bir oturum bırakmadı; \"Oturumu açık tut\" işaretli olmayabilir. Kutuyu işaretleyip yeniden giriş yaparak tekrar dene ya da hesabı şifreyle ekle."
             ),
             Error::AlreadySaved(n) => write!(f, "Bu oturum zaten \"{n}\" olarak kayıtlı; kaydı güncellendi."),
             Error::UnknownAccount(n) => write!(f, "Hesap bulunamadı: {n}"),
@@ -350,7 +350,9 @@ impl Switcher {
         let live = self.live(&cfg);
         let active = owner(&state, &live).map(|a| a.id.clone());
         let (login, persist) = match live.login {
-            LoginState::SignedIn { persist } => ("signed_in", persist),
+            // Login tokens already on disk prove the session is being kept,
+            // whatever the client says about the box.
+            LoginState::SignedIn { persist } => ("signed_in", if live.file.has_tokens { Some(true) } else { persist }),
             LoginState::SignedOut => ("signed_out", None),
             LoginState::Unknown => ("unknown", None),
         };
@@ -480,11 +482,12 @@ impl Switcher {
         let cfg = self.config()?;
         let live = self.live(&cfg);
         if live.running {
-            match live.login {
-                LoginState::SignedIn { persist: Some(false) } => return Err(Error::NotPersisted),
-                LoginState::SignedIn { .. } => {}
-                _ => return Err(Error::NoSession),
+            if !live.signed_in() {
+                return Err(Error::NoSession);
             }
+            // What the client reports about the "stay signed in" box is not
+            // relied on here: some versions report it wrongly. The file the
+            // client writes when it quits is what decides, just below.
             self.ensure_not_in_game(&cfg)?;
             self.close_client(&cfg)?;
         }

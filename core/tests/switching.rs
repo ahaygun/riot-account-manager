@@ -30,6 +30,8 @@ struct Sim {
     typed: Vec<(String, String)>,
     typer_error: Option<String>,
     league: Option<LeagueInfo>,
+    /// The local API says "stay signed in" is off although it is on.
+    misreport_persist: bool,
 }
 
 /// One object plays the processes, the local API and the keyboard, since
@@ -131,7 +133,7 @@ impl ClientApi for World {
         if s.running.is_empty() {
             LoginState::Unknown
         } else if s.signed_in.is_some() {
-            LoginState::SignedIn { persist: s.persist }
+            LoginState::SignedIn { persist: if s.misreport_persist { Some(false) } else { s.persist } }
         } else {
             LoginState::SignedOut
         }
@@ -444,10 +446,29 @@ fn await_login_can_be_cancelled() {
 fn capture_refuses_sessions_that_would_not_survive() {
     let f = fixture("persist");
     assert!(matches!(f.sw.capture_new("A", Game::Lol), Err(Error::NoSession)));
+    assert!(matches!(f.sw.capture_new("  ", Game::Lol), Err(Error::EmptyField(_))));
+    // Signed in without "stay signed in": quitting leaves nothing on disk.
     f.w.sign_in_by_hand("puuid-A", "A-1", false);
     assert!(matches!(f.sw.capture_new("A", Game::Lol), Err(Error::NotPersisted)));
-    assert!(!f.w.sim().running.is_empty(), "client was left alone");
-    assert!(matches!(f.sw.capture_new("  ", Game::Lol), Err(Error::EmptyField(_))));
+    assert!(f.sw.view().unwrap().accounts.is_empty());
+}
+
+#[test]
+fn a_wrong_stay_signed_in_report_does_not_block_capture() {
+    let f = fixture("misreport");
+    // The box is ticked and the client will write its session on quit, but
+    // its local API claims the box is off.
+    f.w.sign_in_by_hand("puuid-A", "A-1", true);
+    f.w.sim().misreport_persist = true;
+    assert_eq!(f.sw.view().unwrap().client.persist, Some(false), "nothing on disk yet: the report is all we have");
+    let a = f.sw.capture_new("Ana", Game::Lol).unwrap();
+    assert_eq!(a.puuid.as_deref(), Some("puuid-A"));
+    f.sw.new_login().unwrap();
+    f.sw.switch("ana").unwrap();
+    assert!(f.w.live_token().contains("A-1"));
+    // Running again with tokens on disk, the view no longer repeats the wrong report.
+    f.w.sim().misreport_persist = true;
+    assert_eq!(f.sw.view().unwrap().client.persist, Some(true));
 }
 
 #[test]

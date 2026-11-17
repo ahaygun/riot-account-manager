@@ -389,14 +389,18 @@ function wizardTick() {
   if (wizard.step !== "wait") return;
   const c = view.client;
   if (c.login === "signed_in" && view.unsaved_session) {
+    // Riot Client's own report about the box is sometimes wrong, so it is
+    // a warning with a way through, never a dead end.
     if (c.persist === false) {
       $("wiz-wait-status").textContent =
-        "Giriş yapıldı ama \"Oturumu açık tut\" işaretli değil. Riot Client'ta çıkış yapıp kutuyu işaretleyerek tekrar gir.";
-      $("wiz-wait-status").className = "hint error";
+        "Giriş yapıldı. Riot Client \"Oturumu açık tut\" kutusunun işaretli olmadığını bildiriyor; bu bildirim bazen yanlış oluyor. Kutuyu işaretlediysen devam et.";
+      $("wiz-wait-status").className = "hint";
+      $("wiz-anyway").hidden = false;
       return;
     }
     return wizardName("session");
   }
+  $("wiz-anyway").hidden = true;
   $("wiz-wait-status").className = "hint";
   $("wiz-wait-status").textContent =
     c.login === "signed_in" ? "Bu hesap zaten kayıtlı. Başka bir hesapla giriş yap."
@@ -416,6 +420,10 @@ $("wiz-session").addEventListener("click", async () => {
 });
 
 $("wiz-password").addEventListener("click", () => wizardName("password"));
+$("wiz-anyway").addEventListener("click", () => {
+  $("wiz-anyway").hidden = true;
+  wizardName("session");
+});
 
 $("wiz-save").addEventListener("click", async () => {
   const name = $("wiz-name-input").value;
