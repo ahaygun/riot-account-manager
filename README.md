@@ -52,9 +52,16 @@ Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 ## Listede görünenler
 
 - Riot ID, tek/çift sıralama ligi ve seviye: League istemcisi o hesapla açıkken okunur ve hatırlanır.
+- **N gündür açılmadı:** hesabın oturumu en az 7 gündür kullanılmadı. Riot kullanılmayan oturumları bir süre sonra sonlandırır; süreyi açıklamaz. Hesaba geçince oturum hâlâ geçerliyse uyarı kalkar. Eşik `config.json` içindeki `stale_after_days` ile değişir, 0 uyarıyı kapatır.
 - **giriş gerekli:** kayıtlı oturum son denemede kabul edilmedi. Şifre kayıtlıysa otomatik girilir; değilse Riot Client'ta "Oturumu açık tut" ile bir kez elle gir, kayıt kendiliğinden yenilenir.
 
 **Ayarlar** (sağ alttaki dişli): sürüm ve güncellemeler, Windows açılınca tepside başlatma, pencereyi açan kısayol, güvenlik ve veriler.
+
+## Riot Client'ı elle kullanırken
+
+- Hesap değiştirmek için Riot Client'taki **Çıkış yap** yerine QuickSwitch'i kullan. Çıkış yapmak o oturumu Riot tarafında geçersiz kılabilir; kayıtlı kopya da onunla birlikte işe yaramaz hale gelir.
+- Riot Client'ta elle başka bir hesaba girersen QuickSwitch bunu fark eder: hesap kayıtlıysa oturum o hesabın kaydına yazılır, kayıtlı değilse hiçbir kaydın üstüne yazılmaz ve "kaydet" önerisi çıkar.
+- Bir kayıttan beklenenden farklı bir hesap açılırsa o kayıt silinir ve hesap "giriş gerekli" olarak işaretlenir.
 
 ## Otomatik giriş hakkında
 
@@ -63,7 +70,7 @@ Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 ## Güvenlik
 
 - Veriler `%LOCALAPPDATA%\QuickSwitch\` içinde, Windows hesabına bağlı şifreli durur. Uygulamanın tek internet bağlantısı, açıksa güncelleme denetimidir.
-- İsteğe bağlı **uygulama kilidi** oturumları ve şifreleri ayrıca bir ana şifreyle şifreler; uygulama her başladığında bir kez sorulur.
+- İsteğe bağlı **uygulama kilidi** oturumları ve şifreleri ayrıca bir ana şifreyle şifreler; uygulama her başladığında bir kez sorulur. Kilit, uygulama 15 dakika kullanılmayınca kendiliğinden yeniden kapanır (Güvenlik ekranından değiştirilir).
 - Uygulamadaki **Güvenlik** ekranı neyin saklandığını gösterir, klasörü açar, kilidi yönetir ve tüm verileri siler.
 - Ayrıntılar ve sınırlar: [SECURITY.md](SECURITY.md).
 

@@ -20,6 +20,8 @@ Her şey `%LOCALAPPDATA%\QuickSwitch\` içinde durur. `Roaming` yerine `Local` s
 - **Her zaman:** Windows DPAPI. Dosyaları yalnızca aynı bilgisayardaki aynı Windows kullanıcısı açabilir. Diski çıkarıp başka bir makinede okumak ya da dosyaları kopyalamak işe yaramaz.
 - **Uygulama kilidi (isteğe bağlı):** Ana şifreden Argon2id (64 MiB, 3 tur) ile 256 bit anahtar türetilir; oturumlar ve şifreler XChaCha20-Poly1305 ile şifrelenir. Anahtar yalnızca bellekte, yalnızca uygulama açıkken tutulur. Ana şifre hiçbir yere yazılmaz ve kurtarılamaz.
 - Değiştirilmiş bir dosya açılmaz; şifreleme bütünlüğü de doğrular.
+- **Kendiliğinden kilitlenme:** Kilit açıkken uygulama bir süre (varsayılan 15 dakika) kullanılmazsa anahtar bellekten silinir ve ana şifre yeniden sorulur. Geçiş yapmak, pencerede tıklamak ya da yazmak kullanım sayılır. Süren bir giriş takibi ya da sıradaki bir geçiş varken kilitlenmez.
+- Dosyalar önce geçici bir adla yazılır, diske ulaştığı doğrulanır, sonra asıl adını alır; elektrik kesintisi yarım dosya bırakmaz. Kilit değişimi yarıda kesilirse sonraki açılışta ya tamamlanır ya da geri alınır.
 
 ## Ağ
 
@@ -40,7 +42,7 @@ Her şey `%LOCALAPPDATA%\QuickSwitch\` içinde durur. `Roaming` yerine `Local` s
 
 - Maç sürerken hesap değiştirilmez.
 - Oturum dosyaları yalnızca Riot Client kapalıyken ve yalnızca tanımlı yollara yazılır; kayıt içindeki yol bu yolların dışına çıkıyorsa geri yükleme reddedilir.
-- Açık bir oturum, Riot hesap kimliği eşleşmeyen bir hesabın üstüne kaydedilmez.
+- Açık bir oturum, Riot hesap kimliği eşleşmeyen bir hesabın üstüne kaydedilmez. Riot Client'ta elle yapılan girişler arka planda izlenir (yalnızca kimin girdiği, yerel arayüzden), böylece kapalı istemcinin bıraktığı oturum da yanlış hesaba yazılmaz. Uygulama çalışmıyorken elle başka hesaba girildiyse bu görülemez; o durumda yanlış kayıt ilk geçişte fark edilip silinir.
 - Kilidi kaldırmak ya da değiştirmek, uygulama açıkken bile mevcut ana şifreyi ister.
 - **Tüm verileri sil** her şeyi kaldırır; Riot Client'ın kendi dosyalarına dokunmaz.
 

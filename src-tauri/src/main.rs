@@ -5,9 +5,9 @@ use quickswitch_core::{Env, Error, Game, LocalApi, LoginOutcome, Switcher, SysPr
 use serde::Serialize;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
@@ -22,6 +22,10 @@ const UPKEEP_EVERY: u32 = 5;
 /// A newer version is looked for shortly after start and then this often.
 const UPDATE_FIRST_TICK: u32 = 4;
 const UPDATE_EVERY: u32 = 6 * 60 * 60 / 3;
+/// How long one look at the client's state serves everyone who asks. A
+/// change is announced to the window and the tray together, and each asks
+/// for the state; this keeps that to one round of questions to the client.
+const VIEW_TTL: Duration = Duration::from_secs(1);
 
 /// Set once the app is up; lets core callbacks reach the window.
 static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
@@ -63,6 +67,21 @@ struct Shared {
     can_update: bool,
     /// A newer version that was found and is waiting for the user's go.
     update: Mutex<Option<Update>>,
+    /// The last look at the state and when it was taken (see `VIEW_TTL`).
+    view: Mutex<Option<(Instant, View)>>,
+    /// The tray menu as last built, so it is replaced only when it differs.
+    tray_items: Mutex<Vec<(String, String)>>,
+    /// When the user last did something with the app; the lock closes
+    /// itself some time after that.
+    last_use: Mutex<Instant>,
+    /// Sign-ins being followed right now. They need the stored password,
+    /// so the lock does not close under them.
+    watchers: AtomicU32,
+}
+
+/// Notes that the user is using the app.
+fn touch(app: &AppHandle) {
+    *lock(&app.state::<Shared>().last_use) = Instant::now();
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -89,8 +108,25 @@ fn other(message: impl Into<String>) -> CmdError {
 
 type CmdResult<T> = Result<T, CmdError>;
 
+/// The state, taken now or within the last `VIEW_TTL`. The lock is held
+/// while the client is asked, so callers that arrive together share one
+/// answer instead of each asking.
+fn current_view(app: &AppHandle) -> Result<View, Error> {
+    let shared = app.state::<Shared>();
+    let mut cached = lock(&shared.view);
+    if let Some((taken, view)) = cached.as_ref() {
+        if taken.elapsed() < VIEW_TTL {
+            return Ok(view.clone());
+        }
+    }
+    let view = shared.sw.view()?;
+    *cached = Some((Instant::now(), view.clone()));
+    Ok(view)
+}
+
 /// Tells the window and the tray that something they show has changed.
 fn changed(app: &AppHandle) {
+    *lock(&app.state::<Shared>().view) = None;
     let _ = app.emit("state-changed", ());
     refresh_tray(app);
 }
@@ -114,6 +150,7 @@ fn notice(app: &AppHandle, text: impl Into<String>, error: bool) {
 /// `game` overrides the account's own game for this one switch.
 /// `force` overrides only an unreadable League client state.
 fn do_switch(app: &AppHandle, target: &str, game: Option<Game>, force: bool) -> CmdResult<String> {
+    touch(app);
     let shared = app.state::<Shared>();
     let (result, generation) = {
         let _ops = lock(&shared.ops);
@@ -135,6 +172,15 @@ fn do_switch(app: &AppHandle, target: &str, game: Option<Game>, force: bool) -> 
 fn watch_login(app: AppHandle, id: String, game: Option<Game>, generation: u64) {
     std::thread::spawn(move || {
         let shared = app.state::<Shared>();
+        // Counted for as long as this thread follows the sign-in.
+        struct Watching<'a>(&'a AtomicU32);
+        impl Drop for Watching<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        shared.watchers.fetch_add(1, Ordering::SeqCst);
+        let _watching = Watching(&shared.watchers);
         let cancelled = || shared.generation.load(Ordering::SeqCst) != generation;
         let outcome = shared.sw.await_login(&id, game, &cancelled);
         shared.sw.log(&format!("switch: sign-in {}", match &outcome {
@@ -197,17 +243,18 @@ fn get_state(app: AppHandle) -> CmdResult<AppView> {
     let shared = app.state::<Shared>();
     let pending = lock(&shared.pending).clone();
     let available = lock(&shared.update).as_ref().map(|u| u.version.clone());
+    let config = shared.sw.config().ok();
     Ok(AppView {
-        view: shared.sw.view()?,
+        view: current_view(&app)?,
         pending,
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
         version: env!("CARGO_PKG_VERSION"),
         update: UpdateView {
             supported: shared.can_update,
-            enabled: shared.sw.config().map(|c| c.check_updates).unwrap_or(true),
+            enabled: config.as_ref().map(|c| c.check_updates).unwrap_or(true),
             available,
         },
-        window_hotkey: shared.sw.config().map(|c| c.window_hotkey).unwrap_or_default(),
+        window_hotkey: config.map(|c| c.window_hotkey).unwrap_or_default(),
     })
 }
 
@@ -237,6 +284,7 @@ fn cancel_queue(app: AppHandle) {
 
 /// Runs one operation that may close the client or move session files.
 fn exclusive<T>(app: &AppHandle, f: impl FnOnce(&Switcher) -> quickswitch_core::switcher::Result<T>) -> CmdResult<T> {
+    touch(app);
     let shared = app.state::<Shared>();
     let result = {
         let _ops = lock(&shared.ops);
@@ -250,6 +298,7 @@ fn exclusive<T>(app: &AppHandle, f: impl FnOnce(&Switcher) -> quickswitch_core::
 
 /// Runs one small edit of the account list.
 fn edit<T>(app: &AppHandle, f: impl FnOnce(&Switcher) -> quickswitch_core::switcher::Result<T>) -> CmdResult<T> {
+    touch(app);
     let result = f(&app.state::<Shared>().sw);
     changed(app);
     Ok(result?)
@@ -332,6 +381,7 @@ fn set_autostart(app: AppHandle, enabled: bool) -> CmdResult<()> {
 
 #[tauri::command(async)]
 fn unlock(app: AppHandle, password: String) -> CmdResult<()> {
+    touch(&app);
     let ok = app.state::<Shared>().sw.unlock(&password)?;
     changed(&app);
     if ok { Ok(()) } else { Err(Error::WrongPassword.into()) }
@@ -341,6 +391,19 @@ fn unlock(app: AppHandle, password: String) -> CmdResult<()> {
 fn lock_now(app: AppHandle) {
     app.state::<Shared>().sw.lock_now();
     changed(&app);
+}
+
+/// The window reports that the user is doing something in it (a key, a
+/// click), so the lock does not close while they are looking at the list.
+#[tauri::command(async)]
+fn still_here(app: AppHandle) {
+    touch(&app);
+}
+
+/// Minutes without use before the lock closes itself; zero for never.
+#[tauri::command(async)]
+fn set_auto_lock(app: AppHandle, minutes: u32) -> CmdResult<()> {
+    edit(&app, |sw| sw.set_auto_lock_minutes(minutes))
 }
 
 /// Turns the app lock on, off, or changes its password.
@@ -500,12 +563,11 @@ fn register_hotkeys(app: &AppHandle) {
         let _ = shortcuts.register(toggle);
     }
     let mut map = HashMap::new();
-    if let Ok(view) = shared.sw.view() {
-        for a in &view.accounts {
-            let Some(shortcut) = a.account.hotkey.as_deref().and_then(|h| check_hotkey(h, &window).ok()) else { continue };
-            if shortcuts.register(shortcut).is_ok() {
-                map.insert(shortcut.id(), a.account.id.clone());
-            }
+    // Only the stored list is needed here, not what the client is doing.
+    for a in shared.sw.accounts().unwrap_or_default() {
+        let Some(shortcut) = a.hotkey.as_deref().and_then(|h| check_hotkey(h, &window).ok()) else { continue };
+        if shortcuts.register(shortcut).is_ok() {
+            map.insert(shortcut.id(), a.id);
         }
     }
     *lock(&shared.hotkeys) = map;
@@ -546,28 +608,45 @@ fn toggle_window(app: &AppHandle) {
 
 // ---- tray --------------------------------------------------------------------------
 
-fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let view = app.state::<Shared>().sw.view().ok();
-    let mut menu = MenuBuilder::new(app);
-    if let Some(view) = &view {
-        for a in &view.accounts {
+/// The account entries of the tray menu: (menu id, label).
+fn tray_items(app: &AppHandle) -> Vec<(String, String)> {
+    let Ok(view) = current_view(app) else { return Vec::new() };
+    view.accounts
+        .iter()
+        .map(|a| {
             let active = view.active.as_deref() == Some(a.account.id.as_str());
             let mut label = if active { format!("●  {}", a.account.name) } else { format!("     {}", a.account.name) };
             if a.account.needs_login {
                 label.push_str("  (giriş gerekli)");
             }
-            menu = menu.item(&MenuItemBuilder::with_id(format!("acc:{}", a.account.id), label).build(app)?);
-        }
-        if !view.accounts.is_empty() {
-            menu = menu.separator();
-        }
+            (format!("acc:{}", a.account.id), label)
+        })
+        .collect()
+}
+
+fn build_menu(app: &AppHandle, items: &[(String, String)]) -> tauri::Result<Menu<Wry>> {
+    let mut menu = MenuBuilder::new(app);
+    for (id, label) in items {
+        menu = menu.item(&MenuItemBuilder::with_id(id, label).build(app)?);
+    }
+    if !items.is_empty() {
+        menu = menu.separator();
     }
     menu.text("show", "Pencereyi aç").text("quit", "Çıkış").build()
 }
 
+/// Rebuilds the tray menu, unless it would come out the same.
 fn refresh_tray(app: &AppHandle) {
-    if let (Some(tray), Ok(menu)) = (app.tray_by_id(TRAY_ID), build_menu(app)) {
-        let _ = tray.set_menu(Some(menu));
+    let items = tray_items(app);
+    let shared = app.state::<Shared>();
+    let mut shown = lock(&shared.tray_items);
+    if *shown == items {
+        return;
+    }
+    if let (Some(tray), Ok(menu)) = (app.tray_by_id(TRAY_ID), build_menu(app, &items)) {
+        if tray.set_menu(Some(menu)).is_ok() {
+            *shown = items;
+        }
     }
 }
 
@@ -599,6 +678,13 @@ fn background_loop(app: AppHandle) {
             _ => clear_ticks = 0,
         }
 
+        // Skipped while a switch is in progress: it changes who is signed in.
+        if let Ok(_ops) = shared.ops.try_lock() {
+            if shared.sw.observe_live().unwrap_or(false) {
+                changed(&app);
+            }
+        }
+
         if shared.can_update && tick % UPDATE_EVERY == UPDATE_FIRST_TICK && shared.sw.config().map(|c| c.check_updates).unwrap_or(false) {
             // Offline or no release yet: simply try again next time.
             let _ = tauri::async_runtime::block_on(find_update(&app));
@@ -609,7 +695,12 @@ fn background_loop(app: AppHandle) {
             let Ok(_ops) = shared.ops.try_lock() else { continue };
             let filed = shared.sw.sync_idle().ok().flatten().is_some();
             let ranked = shared.sw.refresh_league().unwrap_or(false);
-            if filed || ranked {
+            // The lock closes itself after going unused, but never under a
+            // sign-in that is being followed or a switch that is waiting.
+            let busy = shared.watchers.load(Ordering::SeqCst) > 0 || lock(&shared.pending).is_some();
+            let idle = lock(&shared.last_use).elapsed();
+            let locked = !busy && shared.sw.auto_lock_if_idle(idle);
+            if filed || ranked || locked {
                 changed(&app);
             }
         }
@@ -631,7 +722,7 @@ fn main() {
 
     let env = Env::from_system();
     let api = Arc::new(LocalApi::new(env.riot_games_dir.clone()));
-    let mut switcher = Switcher::new(env, Arc::new(SysProcs), api, Arc::new(WindowTyper));
+    let mut switcher = Switcher::new(env, Arc::new(SysProcs::default()), api, Arc::new(WindowTyper));
     switcher.ask_for_focus = Arc::new(ask_for_focus);
 
     // The updater is only configured in release builds made with a signing
@@ -670,6 +761,10 @@ fn main() {
             hotkeys: Mutex::new(HashMap::new()),
             can_update,
             update: Mutex::new(None),
+            view: Mutex::new(None),
+            tray_items: Mutex::new(Vec::new()),
+            last_use: Mutex::new(Instant::now()),
+            watchers: AtomicU32::new(0),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -691,6 +786,8 @@ fn main() {
             set_autostart,
             unlock,
             lock_now,
+            still_here,
+            set_auto_lock,
             set_lock,
             wipe_all,
             open_data_dir,
@@ -702,9 +799,10 @@ fn main() {
             let handle = app.handle().clone();
             let _ = APP.set(handle.clone());
 
+            let items = tray_items(&handle);
             let mut tray = TrayIconBuilder::with_id(TRAY_ID)
                 .tooltip("QuickSwitch")
-                .menu(&build_menu(&handle)?)
+                .menu(&build_menu(&handle, &items)?)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => show_window(app),
@@ -724,6 +822,7 @@ fn main() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
+            *lock(&handle.state::<Shared>().tray_items) = items;
 
             register_hotkeys(&handle);
 

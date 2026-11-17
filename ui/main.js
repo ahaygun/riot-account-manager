@@ -179,6 +179,14 @@ function row(a, i) {
   label.textContent = a.name;
   name.append(label);
   if (a.needs_login) name.append(tag("giriş gerekli", true));
+  else if (a.stale) {
+    // Riot ends sessions that go unused; this one may already be gone.
+    const t = tag(`${a.idle_days} gündür açılmadı`, true);
+    t.title = a.has_password
+      ? "Uzun süredir kullanılmayan oturumu Riot sonlandırmış olabilir. Öyleyse kayıtlı şifreyle giriş yapılır."
+      : "Uzun süredir kullanılmayan oturumu Riot sonlandırmış olabilir. Öyleyse Riot Client'ta bir kez elle giriş yapman gerekir.";
+    name.append(t);
+  }
   if (a.hotkey) name.append(tag(hotkeyLabel(a.hotkey)));
 
   const detail = document.createElement("span");
@@ -824,6 +832,11 @@ function fillSecurity() {
   $("sec-lock-off").hidden = !!sec.lock_enabled;
   $("sec-lock-on").hidden = !sec.lock_enabled;
   $("sec-lock-now").disabled = !sec.unlocked;
+  const autoLock = $("sec-auto-lock");
+  const minutes = String(sec.auto_lock_minutes ?? 15);
+  // A value set by hand in config.json still shows up as itself.
+  if (![...autoLock.options].some((o) => o.value === minutes)) autoLock.add(new Option(`${minutes} dakika sonra`, minutes));
+  autoLock.value = minutes;
   $("sec-lock-state").textContent = sec.lock_enabled
     ? "Açık. Uygulama her başladığında, hesap değiştirmeden önce ana şifre sorulur."
     : "Kapalı. Açarsan kayıtlı oturumlar ve şifreler ayrıca bir ana şifreyle şifrelenir; uygulama her başladığında bir kez sorulur. Ana şifre unutulursa kurtarılamaz.";
@@ -861,6 +874,10 @@ $("sec-enable").addEventListener("click", () => {
 $("sec-disable").addEventListener("click", (e) =>
   whileWorking(e.currentTarget, () =>
     secCall("set_lock", { current: $("sec-current").value, new: null }, "Uygulama kilidi kaldırıldı.")));
+$("sec-auto-lock").addEventListener("change", (e) => {
+  const minutes = Number(e.target.value);
+  secCall("set_auto_lock", { minutes }, minutes ? `Kullanılmayınca ${e.target.selectedOptions[0].text.replace(" sonra", "")} içinde kilitlenir.` : "Kendiliğinden kilitlenme kapalı.");
+});
 $("sec-lock-now").addEventListener("click", async () => {
   await withSeal("close", "Kilitleniyor…", "Kilitlendi", () => invoke("lock_now"));
   show("list");
@@ -904,6 +921,19 @@ window.addEventListener("focus", () => {
   if (!$("view-list").hidden) $("filter").focus();
   refresh();
 });
+// Using the window counts as using the app, so the lock does not close
+// itself under the user's hands. Told at most twice a minute.
+let lastSeenHere = 0;
+function stillHere() {
+  if (!view.security.lock_enabled || !view.security.unlocked) return;
+  const now = Date.now();
+  if (now - lastSeenHere < 30000) return;
+  lastSeenHere = now;
+  invoke("still_here").catch(() => {});
+}
+window.addEventListener("keydown", stillHere, { capture: true, passive: true });
+window.addEventListener("pointerdown", stillHere, { capture: true, passive: true });
+
 // What Riot Client is doing shows up in its own state, not as an event:
 // poll while the window is on screen, faster while the wizard is waiting.
 setInterval(() => {

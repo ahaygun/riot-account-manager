@@ -6,3 +6,13 @@ members = ["core", "src-tauri"]
 opt-level = "s"
 lto = true
 strip = true
+# One unit lets the optimiser see the whole program: smaller and a little
+# faster, for a longer release build.
+codegen-units = 1
+
+# The app is built for size, but unlocking with the master password is
+# pure number-crunching (Argon2id over 64 MiB); these are built for speed.
+[profile.release.package.argon2]
+opt-level = 3
+[profile.release.package.blake2]
+opt-level = 3

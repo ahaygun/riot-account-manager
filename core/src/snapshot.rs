@@ -93,15 +93,75 @@ impl Snapshot {
         Ok(Snapshot { files })
     }
 
-    /// Stable content hash (FNV-1a), used only to notice changes.
+    /// Stable content hash (FNV-1a), used only to notice changes. It is
+    /// the hash of `encode()`, fed piece by piece so the snapshot is not
+    /// copied just to be hashed.
     pub fn hash(&self) -> String {
-        let mut h: u64 = 0xcbf29ce484222325;
-        for b in self.encode() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001b3);
+        let mut h = Fnv::new();
+        h.feed(&(self.files.len() as u32).to_le_bytes());
+        for (path, data) in &self.files {
+            h.feed(&(path.len() as u32).to_le_bytes());
+            h.feed(path.as_bytes());
+            h.feed(&(data.len() as u64).to_le_bytes());
+            h.feed(data);
         }
-        format!("{h:016x}")
+        format!("{:016x}", h.0)
     }
+}
+
+struct Fnv(u64);
+
+impl Fnv {
+    fn new() -> Self {
+        Fnv(0xcbf29ce484222325)
+    }
+
+    fn feed(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 ^= *b as u64;
+            self.0 = self.0.wrapping_mul(0x100000001b3);
+        }
+    }
+}
+
+/// A cheap fingerprint of the session paths under `root`: names, sizes and
+/// modification times, without reading any file. Equal stamps mean nothing
+/// was written in between, so a snapshot taken earlier is still current.
+pub fn stamp(root: &Path, session_paths: &[String]) -> io::Result<u64> {
+    fn file(h: &mut Fnv, rel: &str, meta: &fs::Metadata) {
+        let modified = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+        h.feed(rel.as_bytes());
+        h.feed(&[0]);
+        h.feed(&meta.len().to_le_bytes());
+        h.feed(&modified.to_le_bytes());
+    }
+    fn dir(h: &mut Fnv, abs: &Path, rel: &str) -> io::Result<()> {
+        let mut entries: Vec<fs::DirEntry> = fs::read_dir(abs)?.collect::<Result<_, _>>()?;
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let child = format!("{rel}/{name}");
+            let ty = entry.file_type()?;
+            if ty.is_dir() {
+                dir(h, &entry.path(), &child)?;
+            } else if ty.is_file() && !name.eq_ignore_ascii_case("lockfile") {
+                file(h, &child, &entry.metadata()?);
+            }
+        }
+        Ok(())
+    }
+    let mut h = Fnv::new();
+    for rel in session_paths {
+        let rel = normalize(rel)?;
+        let abs = root.join(&rel);
+        match fs::metadata(&abs) {
+            Ok(m) if m.is_dir() => dir(&mut h, &abs, &rel)?,
+            Ok(m) => file(&mut h, &rel, &m),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(h.0)
 }
 
 /// Deletes every session path under `root`.
@@ -167,6 +227,50 @@ mod tests {
         let s = Snapshot { files: vec![("a/b.yaml".into(), b"hello".to_vec()), ("c".into(), vec![])] };
         assert_eq!(Snapshot::decode(&s.encode()).unwrap(), s);
         assert!(Snapshot::decode(&s.encode()[..7]).is_err());
+    }
+
+    #[test]
+    fn hash_is_the_hash_of_the_encoded_snapshot() {
+        // Accounts saved by earlier versions carry this hash; it must not move.
+        let old = |s: &Snapshot| {
+            let mut h: u64 = 0xcbf29ce484222325;
+            for b in s.encode() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            format!("{h:016x}")
+        };
+        for s in [
+            Snapshot::default(),
+            Snapshot { files: vec![("a/b.yaml".into(), b"hello".to_vec()), ("c".into(), vec![])] },
+            Snapshot { files: vec![("Data/Sessions/x".into(), (0..=255u8).cycle().take(5000).collect())] },
+        ] {
+            assert_eq!(s.hash(), old(&s));
+        }
+    }
+
+    #[test]
+    fn stamp_moves_when_a_session_file_is_written_and_only_then() {
+        let root = std::env::temp_dir().join(format!("qsw-snap-stamp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let paths = ["Data/s.yaml".to_string(), "Data/Sessions".to_string()];
+        let empty = stamp(&root, &paths).unwrap();
+        fs::create_dir_all(root.join("Data/Sessions")).unwrap();
+        fs::write(root.join("Data/s.yaml"), "token-1").unwrap();
+        fs::write(root.join("Data/Sessions/a"), "x").unwrap();
+        let first = stamp(&root, &paths).unwrap();
+        assert_ne!(first, empty);
+        assert_eq!(stamp(&root, &paths).unwrap(), first, "nothing written, nothing moved");
+        // Outside the session paths, and the client's lockfile: not ours to watch.
+        fs::write(root.join("Data/other.yaml"), "x").unwrap();
+        fs::write(root.join("Data/Sessions/lockfile"), "x").unwrap();
+        assert_eq!(stamp(&root, &paths).unwrap(), first);
+        fs::write(root.join("Data/s.yaml"), "token-22").unwrap();
+        let second = stamp(&root, &paths).unwrap();
+        assert_ne!(second, first, "a rewritten file");
+        fs::write(root.join("Data/Sessions/b"), "y").unwrap();
+        assert_ne!(stamp(&root, &paths).unwrap(), second, "a new file");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

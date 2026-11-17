@@ -93,6 +93,9 @@ pub struct Account {
     pub hash: String,
     /// Unix seconds of the last snapshot.
     pub updated: u64,
+    /// Unix seconds of the last time Riot accepted this account's session
+    /// (or a sign-in to it), as far as we saw. Zero if never.
+    pub last_ok: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -129,6 +132,13 @@ pub struct Config {
     /// Global hotkey that opens the window. Not Ctrl+Alt+letter: on many
     /// keyboards (Turkish among them) that is AltGr, which types characters.
     pub window_hotkey: String,
+    /// With the app lock on: minutes without use after which the app locks
+    /// itself again. Zero means it stays open until it is closed.
+    pub auto_lock_minutes: u32,
+    /// Days since Riot last accepted an account's saved session after which
+    /// the list warns that it may have expired. Riot ends sessions that go
+    /// unused; it does not say after how long. Zero turns the warning off.
+    pub stale_after_days: u32,
 }
 
 impl Default for Config {
@@ -154,6 +164,8 @@ impl Default for Config {
             ui_processes: s(&["Riot Client.exe", "RiotClientUx.exe"]),
             check_updates: true,
             window_hotkey: "Ctrl+Shift+Space".into(),
+            auto_lock_minutes: 15,
+            stale_after_days: 7,
         }
     }
 }
@@ -189,9 +201,23 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path)
+    write_then_rename(&path.with_extension("tmp"), path, bytes)
+}
+
+/// Writes `bytes` to `tmp`, makes sure they have reached the disk, and only
+/// then gives the file its real name: after a power cut the name holds
+/// either the old content or the new, never an empty file.
+pub fn write_then_rename(tmp: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_synced(tmp, bytes)?;
+    fs::rename(tmp, path)
+}
+
+/// Writes a file and waits until it is on the disk.
+pub fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    let mut file = fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 pub fn save_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {

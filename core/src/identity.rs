@@ -18,13 +18,17 @@ pub struct FileSession {
     pub has_tokens: bool,
     /// Account id (PUUID), only present in the older format.
     pub sub: Option<String>,
+    /// Account id read out of a token, when a token happens to be a JWT
+    /// that names its account. Less certain than `sub`: it is only ever
+    /// used to recognise an account we already know, never to rule one out.
+    pub hint: Option<String>,
 }
 
 pub fn read_file_session(riot_games_dir: &Path) -> FileSession {
     match std::fs::read_to_string(riot_games_dir.join(PRIVATE_SETTINGS)) {
         Ok(text) => {
             let (has_tokens, sub) = parse(&text);
-            FileSession { exists: true, has_tokens, sub }
+            FileSession { exists: true, has_tokens, sub, hint: token_account(&text) }
         }
         Err(_) => FileSession::default(),
     }
@@ -77,6 +81,60 @@ pub fn parse(text: &str) -> (bool, Option<String>) {
     (has_tokens, sub)
 }
 
+/// The account id that the tokens in the file agree on, if any of them is
+/// a JWT carrying one. `None` when there is none, or when they disagree.
+pub fn token_account(text: &str) -> Option<String> {
+    let mut found: Option<String> = None;
+    for line in text.lines() {
+        let Some((_, v)) = line.split_once(':') else { continue };
+        let Some(sub) = jwt_sub(&unquote(v)) else { continue };
+        match &found {
+            Some(seen) if *seen != sub => return None,
+            _ => found = Some(sub),
+        }
+    }
+    found
+}
+
+/// The `sub` claim of a JWT, if `token` is one and the claim looks like a
+/// Riot account id (a UUID). Nothing is verified: this reads, it does not trust.
+fn jwt_sub(token: &str) -> Option<String> {
+    let mut parts = token.split('.');
+    let (_, payload) = (parts.next()?, parts.next()?);
+    if payload.len() < 16 || payload.len() > 8192 {
+        return None;
+    }
+    let claims: serde_json::Value = serde_json::from_slice(&base64url(payload)?).ok()?;
+    let sub = claims.get("sub")?.as_str()?;
+    let shape_ok = sub.len() == 36
+        && sub.bytes().enumerate().all(|(i, b)| if matches!(i, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() });
+    shape_ok.then(|| sub.to_ascii_lowercase())
+}
+
+/// Decodes unpadded (or padded) base64url. `None` on any other character.
+fn base64url(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for b in text.trim_end_matches('=').bytes() {
+        let v = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'-' | b'+' => 62,
+            b'_' | b'/' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 fn unquote(s: &str) -> String {
     let s = s.trim();
     let s = s
@@ -111,6 +169,24 @@ riot-login:
                     value: "x"
 "#;
         assert_eq!(parse(t), (true, Some("1111-puuid".into())));
+    }
+
+    #[test]
+    fn a_token_that_names_its_account_gives_a_hint() {
+        // {"alg":"none"} . {"sub":"b639ec2f-e2a0-509a-85f2-ffbec2526938","x":1} . sig
+        let jwt = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJiNjM5ZWMyZi1lMmEwLTUwOWEtODVmMi1mZmJlYzI1MjY5MzgiLCJ4IjoxfQ.c2ln";
+        let file = format!("psl:\n    authorization:\n        riot-client:\n            id_token: \"{jwt}\"\n            refresh_token: \"opaque-value\"\n");
+        assert_eq!(token_account(&file).as_deref(), Some("b639ec2f-e2a0-509a-85f2-ffbec2526938"));
+        assert_eq!(parse(&file), (true, None), "the certain id is still only the cookie");
+
+        // No JWT, a JWT without an account id, and a `sub` that is not an account id.
+        assert_eq!(token_account("refresh_token: \"opaque.value.here\"\n"), None);
+        assert_eq!(token_account("id_token: \"eyJhbGciOiJub25lIn0.eyJ4IjoxfQ.c2ln\"\n"), None);
+        // {"sub":"riot-client"}
+        assert_eq!(token_account("id_token: \"eyJhbGciOiJub25lIn0.eyJzdWIiOiJyaW90LWNsaWVudCJ9.c2ln\"\n"), None);
+        // Two tokens for two different accounts: no hint at all.
+        let other = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJhYWFhYWFhYS1lMmEwLTUwOWEtODVmMi1mZmJlYzI1MjY5MzgifQ.c2ln";
+        assert_eq!(token_account(&format!("a: \"{jwt}\"\nb: \"{other}\"\n")), None);
     }
 
     #[test]

@@ -146,7 +146,9 @@ impl Default for Timing {
         Timing {
             quit_timeout: Duration::from_secs(8),
             settle: Duration::from_millis(250),
-            poll: Duration::from_secs(1),
+            // Asking the client is a request to 127.0.0.1; a short wait
+            // means a sign-in is noticed, and acted on, without delay.
+            poll: Duration::from_millis(300),
             boot_wait: Duration::from_secs(60),
             signed_out_grace: Duration::from_secs(8),
             ui_load: Duration::from_secs(3),
@@ -165,6 +167,11 @@ pub struct AccountView {
     pub has_password: bool,
     /// A saved session exists.
     pub has_session: bool,
+    /// Whole days since Riot last accepted this account's saved session,
+    /// when there is one and that is known.
+    pub idle_days: Option<u64>,
+    /// Unused for long enough that the session may have expired.
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -200,6 +207,8 @@ pub struct SecurityView {
     pub data_dir: String,
     pub saved_sessions: usize,
     pub saved_passwords: usize,
+    /// Minutes without use before the app locks itself; zero for never.
+    pub auto_lock_minutes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -270,15 +279,25 @@ pub struct Switcher {
     /// Told when the user has to click Riot Client's window for a typed
     /// login to go on (`true`), and when that is over (`false`).
     pub ask_for_focus: Arc<dyn Fn(bool) + Send + Sync>,
+    /// The time in Unix seconds. Tests move it to age a session.
+    pub clock: Arc<dyn Fn() -> u64 + Send + Sync>,
     vault: Vault,
     /// Serialises read-modify-write of the account list across threads.
     state_lock: Mutex<()>,
+    /// What the session files and the account list looked like when
+    /// `sync_idle` last finished; while that holds it has nothing to do.
+    idle_seen: Mutex<Option<IdleStamp>>,
+    /// The client was signed in the last time `observe_live` looked.
+    seen_signed_in: Mutex<bool>,
 }
+
+/// (session files, account list): see `Switcher::idle_stamp`.
+type IdleStamp = (u64, Option<(u64, SystemTime)>);
 
 impl Switcher {
     pub fn new(env: Env, procs: Arc<dyn Procs>, api: Arc<dyn ClientApi>, typer: Arc<dyn LoginTyper>) -> Self {
         let vault = Vault::new(env.data_dir.join("vault.json"));
-        Switcher {
+        let switcher = Switcher {
             env,
             procs,
             api,
@@ -286,9 +305,18 @@ impl Switcher {
             timing: Timing::default(),
             kdf: KdfParams::default(),
             ask_for_focus: Arc::new(|_| {}),
+            clock: Arc::new(system_now),
             vault,
             state_lock: Mutex::new(()),
-        }
+            idle_seen: Mutex::new(None),
+            seen_signed_in: Mutex::new(false),
+        };
+        switcher.finish_relock();
+        switcher
+    }
+
+    fn now(&self) -> u64 {
+        (self.clock)()
     }
 
     // ---- storage -----------------------------------------------------------
@@ -349,6 +377,29 @@ impl Switcher {
         Ok(store::save_json(&self.env.data_dir.join("config.json"), &cfg)?)
     }
 
+    pub fn set_auto_lock_minutes(&self, minutes: u32) -> Result<()> {
+        let mut cfg = self.config()?;
+        // A day is the most that still counts as "locks itself".
+        cfg.auto_lock_minutes = minutes.min(24 * 60);
+        Ok(store::save_json(&self.env.data_dir.join("config.json"), &cfg)?)
+    }
+
+    /// Locks the app if the lock is on, open, and the app has gone unused
+    /// for `idle`, as long as the setting asks for it. Returns true if it
+    /// locked. The caller makes sure no switch or sign-in is under way.
+    pub fn auto_lock_if_idle(&self, idle: Duration) -> bool {
+        if !self.vault.enabled() || !self.vault.unlocked() {
+            return false;
+        }
+        let minutes = self.config().map(|c| c.auto_lock_minutes).unwrap_or(0);
+        if minutes == 0 || idle < Duration::from_secs(minutes as u64 * 60) {
+            return false;
+        }
+        self.vault.lock();
+        self.log("lock: closed after going unused");
+        true
+    }
+
     /// `hotkey` is stored as given; the app layer decides what is valid.
     pub fn set_window_hotkey(&self, hotkey: &str) -> Result<()> {
         let hotkey = clean(hotkey, "Kısayol")?;
@@ -381,7 +432,11 @@ impl Switcher {
     // ---- what is going on right now ---------------------------------------
 
     fn live(&self, cfg: &Config) -> Live {
-        let running = !self.procs.running(&cfg.client_processes).is_empty();
+        self.live_given(!self.procs.running(&cfg.client_processes).is_empty())
+    }
+
+    /// `live`, when the caller has already looked at the process table.
+    fn live_given(&self, running: bool) -> Live {
         let login = if running { self.api.login() } else { LoginState::Unknown };
         let identity = if matches!(login, LoginState::SignedIn { .. }) { self.api.identity() } else { None };
         Live { running, login, identity, file: identity::read_file_session(&self.env.riot_games_dir) }
@@ -390,7 +445,11 @@ impl Switcher {
     pub fn view(&self) -> Result<View> {
         let cfg = self.config()?;
         let state = self.state()?;
-        let live = self.live(&cfg);
+        // One look at the process table answers both questions.
+        let wanted: Vec<String> = cfg.client_processes.iter().chain(&cfg.game_processes).cloned().collect();
+        let found = self.procs.running(&wanted);
+        let any = |names: &[String]| found.iter().any(|f| names.iter().any(|n| n.eq_ignore_ascii_case(f)));
+        let live = self.live_given(any(&cfg.client_processes));
         let active = owner(&state, &live).map(|a| a.id.clone());
         let (login, persist) = match live.login {
             // Login tokens already on disk prove the session is being kept,
@@ -407,23 +466,33 @@ impl Switcher {
                 data_dir: self.env.data_dir.display().to_string(),
                 saved_sessions: count("snapshots"),
                 saved_passwords: count("secrets"),
+                auto_lock_minutes: cfg.auto_lock_minutes,
             },
             unsaved_session: live.has_session() && active.is_none(),
-            in_game: !self.procs.running(&cfg.game_processes).is_empty(),
+            in_game: any(&cfg.game_processes),
             client: ClientView {
                 running: live.running,
                 login,
                 persist,
                 riot_id: live.identity.as_ref().and_then(|i| i.riot_id.clone()),
             },
-            active,
+            active: active.clone(),
             accounts: state
                 .accounts
                 .into_iter()
-                .map(|account| AccountView {
-                    has_password: self.env.secret_file(&account.id).is_file(),
-                    has_session: !account.hash.is_empty(),
-                    account,
+                .map(|account| {
+                    let has_session = !account.hash.is_empty();
+                    // The account that is signed in right now is as fresh as can be.
+                    let in_use = active.as_deref() == Some(account.id.as_str()) && live.signed_in();
+                    let last = account.last_ok.max(account.updated);
+                    let idle_days = (has_session && !in_use && last > 0).then(|| self.now().saturating_sub(last) / 86_400);
+                    AccountView {
+                        has_password: self.env.secret_file(&account.id).is_file(),
+                        has_session,
+                        idle_days,
+                        stale: cfg.stale_after_days > 0 && idle_days.is_some_and(|d| d >= cfg.stale_after_days as u64),
+                        account,
+                    }
                 })
                 .collect(),
         })
@@ -433,6 +502,12 @@ impl Switcher {
     /// or it cannot be told: a queued switch waits in all three cases.
     pub fn in_game(&self) -> bool {
         self.config().map(|cfg| self.ensure_not_in_game(&cfg, false).is_err()).unwrap_or(false)
+    }
+
+    /// The stored accounts, in order. Reads only our own file: nothing is
+    /// asked of the client or the process table.
+    pub fn accounts(&self) -> Result<Vec<Account>> {
+        Ok(self.state()?.accounts)
     }
 
     pub fn account_name(&self, id: &str) -> Option<String> {
@@ -474,7 +549,7 @@ impl Switcher {
         if self.api.quit() {
             let start = Instant::now();
             while start.elapsed() < self.timing.quit_timeout && !self.procs.running(names).is_empty() {
-                std::thread::sleep(self.timing.poll.min(Duration::from_millis(250)));
+                std::thread::sleep(self.timing.poll.min(Duration::from_millis(100)));
             }
         }
         if !self.procs.kill_and_wait(names, Duration::from_secs(3).min(self.timing.quit_timeout)) {
@@ -494,7 +569,10 @@ impl Switcher {
         }
         let puuid = seen.and_then(|i| i.puuid.clone()).or(file.sub);
         let state = self.state()?;
-        let Some(id) = owner_by(&state, puuid.as_ref()).map(|a| a.id.clone()) else {
+        // Nobody said whose session this is, but a token in it may: if it
+        // names an account we know, that settles it.
+        let hinted = file.hint.as_ref().filter(|_| puuid.is_none()).and_then(|h| state.accounts.iter().find(|a| a.puuid.as_ref().is_some_and(|p| p.eq_ignore_ascii_case(h))));
+        let Some(id) = hinted.or_else(|| owner_by(&state, puuid.as_ref())).map(|a| a.id.clone()) else {
             return Ok(None);
         };
         let snap = Snapshot::collect(&self.env.riot_games_dir, &cfg.session_paths)?;
@@ -510,11 +588,12 @@ impl Switcher {
             let before = acc.clone();
             if acc.hash != hash {
                 acc.hash = hash;
-                acc.updated = now();
+                acc.updated = self.now();
             }
             if seen.is_some() {
                 // The client itself said this account was signed in.
                 acc.needs_login = false;
+                acc.last_ok = self.now();
             }
             acc.puuid = acc.puuid.take().or(puuid);
             acc.riot_id = riot_id.or(acc.riot_id.take());
@@ -523,14 +602,73 @@ impl Switcher {
         Ok(changed.then_some(id))
     }
 
+    /// Background upkeep while the client runs: notices who is signed in.
+    ///
+    /// A session on disk does not always say whose it is, and then it is
+    /// filed under the account we last put in place. That is only right
+    /// while nobody signs in to something else by hand in Riot Client, so
+    /// each new sign-in is looked at: a known account becomes the current
+    /// one, an unknown one means there is no current account, and its
+    /// session is offered for saving instead of overwriting another's.
+    /// Returns true if the current account changed.
+    pub fn observe_live(&self) -> Result<bool> {
+        let signed_in = matches!(self.api.login(), LoginState::SignedIn { .. });
+        let was = std::mem::replace(&mut *self.seen_signed_in.lock().unwrap_or_else(|e| e.into_inner()), signed_in);
+        if !signed_in || was {
+            return Ok(false);
+        }
+        let Some(puuid) = self.api.identity().and_then(|i| i.puuid) else {
+            // Not known yet: look again on the next round.
+            *self.seen_signed_in.lock().unwrap_or_else(|e| e.into_inner()) = false;
+            return Ok(false);
+        };
+        let state = self.state()?;
+        let next = live_owner(&state, &puuid);
+        if next == state.current {
+            return Ok(false);
+        }
+        self.update(|state| state.current = live_owner(state, &puuid))?;
+        self.log(if next.is_some() { "live: a saved account signed in by hand; it is the current one now" } else { "live: an account that is not saved signed in; no current account" });
+        Ok(true)
+    }
+
     /// Background upkeep: when the client is closed (for example the user
     /// quit it), make sure its last session is filed.
+    ///
+    /// This runs every few seconds for as long as the app sits in the tray,
+    /// so it first checks, without reading any file, whether anything was
+    /// written since it last finished. Only then are the session files read.
     pub fn sync_idle(&self) -> Result<Option<String>> {
         let cfg = self.config()?;
         if !self.vault.unlocked() || !self.procs.running(&cfg.client_processes).is_empty() {
             return Ok(None);
         }
-        self.keep_live_session(&cfg, None)
+        let before = self.idle_stamp(&cfg);
+        if before.is_some() && before == *self.idle_seen() {
+            return Ok(None);
+        }
+        let filed = self.keep_live_session(&cfg, None)?;
+        // Filing rewrites the account list, so the stamp is taken again;
+        // it is kept only if the session files stood still meanwhile.
+        let after = self.idle_stamp(&cfg);
+        *self.idle_seen() = after.filter(|a| before.is_some_and(|b| b.0 == a.0));
+        Ok(filed)
+    }
+
+    fn idle_seen(&self) -> std::sync::MutexGuard<'_, Option<IdleStamp>> {
+        self.idle_seen.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Everything `keep_live_session` depends on, by size and time of last
+    /// write. `None` if it cannot be told, which means "do the work".
+    fn idle_stamp(&self, cfg: &Config) -> Option<IdleStamp> {
+        let session = snapshot::stamp(&self.env.riot_games_dir, &cfg.session_paths).ok()?;
+        let list = match std::fs::metadata(self.state_file()) {
+            Ok(m) => Some((m.len(), m.modified().ok()?)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(_) => return None,
+        };
+        Some((session, list))
     }
 
     // ---- adding accounts ---------------------------------------------------
@@ -576,7 +714,8 @@ impl Switcher {
             riot_id: seen.and_then(|i| i.riot_id),
             game,
             hash: snap.hash(),
-            updated: now(),
+            updated: self.now(),
+            last_ok: self.now(),
             ..Account::default()
         };
         self.write_snapshot(&account.id, &snap)?;
@@ -656,7 +795,9 @@ impl Switcher {
         // before closing anything.
         let snap = self.read_snapshot(&account.id)?;
 
+        let started = Instant::now();
         self.close_client(&cfg)?;
+        let closed = started.elapsed();
         // Keep the outgoing account's latest session. Best effort: a
         // failure here must not block the switch.
         let _ = self.keep_live_session(&cfg, live.identity.as_ref());
@@ -672,6 +813,12 @@ impl Switcher {
         self.update(|state| state.current = Some(account.id.clone()))?;
 
         self.procs.launch(&exe, &game.launch_args())?;
+        self.log(&format!(
+            "switch: client closed in {} ms, session files swapped in {} ms ({})",
+            closed.as_millis(),
+            (started.elapsed() - closed).as_millis(),
+            if snap.is_some() { "saved session" } else { "no saved session" }
+        ));
         Ok(Switched { account, game, watch_login: true })
     }
 
@@ -683,6 +830,13 @@ impl Switcher {
         let cfg = self.config()?;
         let t = &self.timing;
 
+        // The grace period exists because a starting client says "signed
+        // out" until it has loaded the session on disk. With no session on
+        // disk (an account that signs in by password) there is nothing to
+        // load, so a quarter of it is kept, only to let the client settle.
+        let nothing_to_load = !identity::read_file_session(&self.env.riot_games_dir).has_tokens;
+        let grace = if nothing_to_load { t.signed_out_grace / 4 } else { t.signed_out_grace };
+
         // 1. Wait for the client to answer at all.
         let start = Instant::now();
         while self.api.login() == LoginState::Unknown {
@@ -691,6 +845,7 @@ impl Switcher {
             }
             std::thread::sleep(t.poll);
         }
+        self.log(&format!("switch: client answered {} ms after launch", start.elapsed().as_millis()));
 
         // 2. Signed in, or signed out for long enough to believe it.
         let mut signed_out_since: Option<Instant> = None;
@@ -699,9 +854,15 @@ impl Switcher {
                 return Ok(LoginOutcome::Unknown);
             }
             match self.api.login() {
-                LoginState::SignedIn { .. } => return self.confirm_signed_in(id, game, false, cancelled),
+                LoginState::SignedIn { .. } => {
+                    self.log(&format!("switch: signed in {} ms after launch", start.elapsed().as_millis()));
+                    // Never seen signed out: this sign-in came from the
+                    // session we put in place, not from anyone's hands.
+                    let from_saved = signed_out_since.is_none();
+                    return self.confirm_signed_in(id, game, false, from_saved, cancelled);
+                }
                 LoginState::SignedOut => {
-                    if signed_out_since.get_or_insert_with(Instant::now).elapsed() >= t.signed_out_grace {
+                    if signed_out_since.get_or_insert_with(Instant::now).elapsed() >= grace {
                         break;
                     }
                 }
@@ -721,13 +882,20 @@ impl Switcher {
                 "Oturumun süresi dolmuş. Riot Client'ta \"Oturumu açık tut\" işaretli giriş yap; kayıt kendiliğinden yenilenir.".into(),
             ));
         };
+        // The login page needs its window: wait for the process that owns
+        // it, then give the page time to render.
+        let waiting = Instant::now();
+        while self.procs.running(&cfg.ui_processes).is_empty() && waiting.elapsed() < t.ui_load * 5 && !cancelled() {
+            std::thread::sleep(t.poll);
+        }
         std::thread::sleep(t.ui_load);
         if cancelled() {
             return Ok(LoginOutcome::Unknown);
         }
         if matches!(self.api.login(), LoginState::SignedIn { .. }) {
-            return self.confirm_signed_in(id, game, false, cancelled);
+            return self.confirm_signed_in(id, game, false, false, cancelled);
         }
+        self.log(&format!("switch: typing the sign-in {} ms after launch", start.elapsed().as_millis()));
         let exe = self.riot_exe(&cfg).ok();
         let log = |line: &str| self.log(line);
         let ask = |on: bool| (self.ask_for_focus)(on);
@@ -748,7 +916,12 @@ impl Switcher {
                 return Ok(LoginOutcome::Unknown);
             }
             if matches!(self.api.login(), LoginState::SignedIn { .. }) {
-                return self.confirm_signed_in(id, game, true, cancelled);
+                self.log(&format!(
+                    "switch: typed sign-in accepted after {} ms ({} ms after launch)",
+                    typed_at.elapsed().as_millis(),
+                    start.elapsed().as_millis()
+                ));
+                return self.confirm_signed_in(id, game, true, false, cancelled);
             }
             std::thread::sleep(t.poll);
         }
@@ -766,16 +939,19 @@ impl Switcher {
         let start = Instant::now();
         while start.elapsed() < self.timing.manual_wait && !cancelled() {
             match self.api.login() {
-                LoginState::SignedIn { .. } => return self.confirm_signed_in(id, game, false, cancelled),
+                LoginState::SignedIn { .. } => return self.confirm_signed_in(id, game, false, false, cancelled),
                 LoginState::Unknown if self.procs.running(&cfg.client_processes).is_empty() => break,
                 _ => {}
             }
-            std::thread::sleep(self.timing.poll);
+            // Up to ten minutes of waiting for a person: no need to hurry.
+            std::thread::sleep(self.timing.poll * 3);
         }
         Ok(LoginOutcome::Unknown)
     }
 
-    fn confirm_signed_in(&self, id: &str, started: Option<Game>, typed: bool, cancelled: &dyn Fn() -> bool) -> Result<LoginOutcome> {
+    /// `from_saved`: the client signed in straight from the session we
+    /// restored, so whoever is signed in is whoever that snapshot holds.
+    fn confirm_signed_in(&self, id: &str, started: Option<Game>, typed: bool, from_saved: bool, cancelled: &dyn Fn() -> bool) -> Result<LoginOutcome> {
         let seen = self.api.identity().unwrap_or_default();
         let game = self.update_account(id, |acc, _| {
             if let (Some(mine), Some(theirs)) = (&acc.puuid, &seen.puuid) {
@@ -784,10 +960,14 @@ impl Switcher {
                 }
             }
             acc.needs_login = false;
+            acc.last_ok = self.now();
             acc.puuid = acc.puuid.take().or(seen.puuid.clone());
             acc.riot_id = seen.riot_id.clone().or(acc.riot_id.take());
             Ok(Some(acc.game))
         })?;
+        if game.is_none() && from_saved {
+            return self.discard_foreign_snapshot(id, seen.puuid.as_deref());
+        }
         let Some(own_game) = game else { return Ok(LoginOutcome::Unknown) };
         let game = started.unwrap_or(own_game);
 
@@ -805,6 +985,35 @@ impl Switcher {
             }
         }
         Ok(LoginOutcome::SignedIn)
+    }
+
+    /// The snapshot stored for `id` signed in as someone else, so it was
+    /// never this account's. It is thrown away rather than used again, the
+    /// account is marked as needing a sign-in, and the current account
+    /// becomes whoever is really signed in.
+    fn discard_foreign_snapshot(&self, id: &str, signed_in: Option<&str>) -> Result<LoginOutcome> {
+        match std::fs::remove_file(self.env.snapshot_file(id)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+        let other = self.update(|state| {
+            if let Some(acc) = state.accounts.iter_mut().find(|a| a.id == id) {
+                acc.hash.clear();
+                acc.needs_login = true;
+            }
+            let real = signed_in.and_then(|p| state.accounts.iter().find(|a| a.id != id && a.puuid.as_deref() == Some(p)));
+            let found = real.map(|a| (a.id.clone(), a.name.clone()));
+            state.current = found.as_ref().map(|(id, _)| id.clone());
+            found.map(|(_, name)| name)
+        })?;
+        self.log("switch: the saved session belonged to another account; it was discarded");
+        let whose = match other {
+            Some(name) => format!("\"{name}\" hesabının"),
+            None => "kayıtlı olmayan başka bir hesabın".to_string(),
+        };
+        Ok(LoginOutcome::NeedsLogin(format!(
+            "Bu hesabın kaydında {whose} oturumu vardı; yanlış kayıt silindi. Riot Client'ta doğru hesaba \"Oturumu açık tut\" işaretli giriş yap, kayıt kendiliğinden yenilenir."
+        )))
     }
 
     fn set_needs_login(&self, id: &str, value: bool) -> Result<()> {
@@ -930,7 +1139,7 @@ impl Switcher {
             let _ = std::fs::rename(&path, path.with_extension("old.log"));
         }
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-            let _ = writeln!(f, "{} {line}", now());
+            let _ = writeln!(f, "{} {line}", self.now());
         }
     }
 
@@ -942,7 +1151,37 @@ impl Switcher {
 
     /// Opens the app lock for this run. False means a wrong password.
     pub fn unlock(&self, password: &str) -> Result<bool> {
-        Ok(self.vault.unlock(password)?)
+        let opened = self.vault.unlock(password)?;
+        if opened {
+            self.finish_relock();
+        }
+        Ok(opened)
+    }
+
+    /// Cleans up after a change of the app lock that was cut short (a crash
+    /// or a power cut). Such a change writes every file anew beside the old
+    /// one, switches the lock, then renames; whatever stopped it left
+    /// `.new` files behind. One that is sealed the way the lock stands now
+    /// belongs to a change that did happen and takes its place; any other
+    /// belongs to a change that never did and is removed. With the lock on
+    /// and closed neither can be told, so they wait for the next unlock.
+    pub fn finish_relock(&self) {
+        for dir in ["snapshots", "secrets"] {
+            let Ok(entries) = std::fs::read_dir(self.env.data_dir.join(dir)) else { continue };
+            for new in entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "new")) {
+                let verdict = std::fs::read(&new).ok().and_then(|blob| self.vault.sealed_for_now(&blob));
+                let done = match verdict {
+                    Some(true) => std::fs::rename(&new, new.with_extension("bin")).is_ok(),
+                    Some(false) => std::fs::remove_file(&new).is_ok(),
+                    None => continue,
+                };
+                self.log(match (verdict, done) {
+                    (Some(true), true) => "lock: finished an interrupted change of the app lock",
+                    (Some(false), true) => "lock: removed a leftover of a change of the app lock that did not happen",
+                    _ => "lock: could not tidy up after an interrupted change of the app lock",
+                });
+            }
+        }
     }
 
     pub fn lock_now(&self) {
@@ -977,7 +1216,7 @@ impl Switcher {
             for path in entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "bin")) {
                 let plain = self.vault.open(&std::fs::read(&path)?)?;
                 let tmp = path.with_extension("new");
-                std::fs::write(&tmp, vault::seal_with(next_key, &plain)?)?;
+                store::write_synced(&tmp, &vault::seal_with(next_key, &plain)?)?;
                 staged.push((tmp, path));
             }
         }
@@ -1014,6 +1253,17 @@ fn owner_by<'a>(state: &'a State, puuid: Option<&String>) -> Option<&'a Account>
     }
     let current = state.current.as_ref().and_then(|id| state.accounts.iter().find(|a| &a.id == id))?;
     (puuid.is_none() || current.puuid.is_none()).then_some(current)
+}
+
+/// Who is the current account, given that the client says `puuid` is
+/// signed in: the account with that id; otherwise the present one if it
+/// has no id yet (it may be signing in for the first time); otherwise none.
+fn live_owner(state: &State, puuid: &str) -> Option<String> {
+    if let Some(known) = state.accounts.iter().find(|a| a.puuid.as_deref() == Some(puuid)) {
+        return Some(known.id.clone());
+    }
+    let current = state.current.as_ref().and_then(|id| state.accounts.iter().find(|a| &a.id == id))?;
+    current.puuid.is_none().then(|| current.id.clone())
 }
 
 fn owner<'a>(state: &'a State, live: &Live) -> Option<&'a Account> {
@@ -1066,6 +1316,6 @@ fn unique_id(name: &str, state: &State) -> String {
     (2..).map(|n| format!("{base}-{n}")).find(|id| !taken(id)).unwrap()
 }
 
-fn now() -> u64 {
+fn system_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }

@@ -7,7 +7,7 @@
 use crate::store;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +56,9 @@ pub trait ClientApi: Send + Sync {
 /// Real implementation.
 pub struct LocalApi {
     riot_games_dir: PathBuf,
+    /// Folder the League client was last found running from. Its lockfile
+    /// is tried first, which saves a look at the process table.
+    league_dir: Mutex<Option<PathBuf>>,
 }
 
 struct Access {
@@ -126,14 +129,34 @@ fn riot_id(name: Option<String>, tag: Option<String>) -> Option<String> {
     }
 }
 
+/// Where the running League client is installed.
+///
+/// Two steps, because asking Windows for an executable's path means
+/// opening the process: first a look at names only, which is one system
+/// call for the whole table, then the path of the one process that matched.
 fn running_league_dir() -> Option<PathBuf> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut sys = System::new().ok()?;
-    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_exe(UpdateKind::Always));
-    sys.processes()
-        .values()
-        .filter(|p| p.name().to_string_lossy().eq_ignore_ascii_case("LeagueClientUx.exe"))
-        .find_map(|p| p.exe().and_then(|e| e.parent()).map(PathBuf::from))
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    let pids: Vec<sysinfo::Pid> = sys
+        .processes()
+        .iter()
+        .filter(|(_, p)| p.name().to_string_lossy().eq_ignore_ascii_case("LeagueClientUx.exe"))
+        .map(|(pid, _)| *pid)
+        .collect();
+    if pids.is_empty() {
+        return None;
+    }
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&pids), false, ProcessRefreshKind::nothing().with_exe(UpdateKind::Always));
+    pids.iter().find_map(|pid| sys.process(*pid)?.exe()?.parent().map(PathBuf::from))
+}
+
+/// Whether the old status route can add anything to what the session
+/// route said: it can when the session route had no answer, and when it
+/// reports a sign-in without saying if "stay signed in" is on.
+pub(crate) fn needs_legacy_status(rso_session: Option<&Value>) -> bool {
+    let Some(kind) = rso_session.and_then(|v| v.get("type")).and_then(Value::as_str) else { return true };
+    kind.eq_ignore_ascii_case("authenticated") && rso_session.and_then(|v| v.get("persistLogin")).and_then(Value::as_bool).is_none()
 }
 
 pub(crate) fn login_from(rso_session: Option<&Value>, legacy_status: Option<&Value>) -> LoginState {
@@ -173,21 +196,44 @@ pub(crate) fn rank_from(stats: &Value) -> Option<String> {
 
 impl LocalApi {
     pub fn new(riot_games_dir: PathBuf) -> Self {
-        LocalApi { riot_games_dir }
+        LocalApi { riot_games_dir, league_dir: Mutex::new(None) }
     }
 
     fn riot(&self) -> Option<Access> {
         read_lockfile(&self.riot_games_dir.join("Riot Client").join("Config").join("lockfile"))
     }
 
+    fn remembered_league_dir(&self) -> Option<PathBuf> {
+        self.league_dir.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn remember_league_dir(&self, dir: Option<PathBuf>) {
+        *self.league_dir.lock().unwrap_or_else(|e| e.into_inner()) = dir;
+    }
+
     /// The League client writes its lockfile next to its executable. The
     /// running process says where that is, which also covers installs in
     /// places Riot's install record does not list.
-    fn league_access(&self) -> Option<Access> {
-        running_league_dir()
+    fn find_league(&self) -> Option<Access> {
+        let (dir, access) = running_league_dir()
             .into_iter()
             .chain(store::league_install_dirs())
-            .find_map(|d| read_lockfile(&d.join("lockfile")))
+            .find_map(|d| read_lockfile(&d.join("lockfile")).map(|a| (d, a)))?;
+        self.remember_league_dir(Some(dir));
+        Some(access)
+    }
+
+    /// GET on the League client. The folder it was last found in is tried
+    /// first; if its lockfile is gone, or is a leftover nobody answers on,
+    /// the client is looked for again.
+    fn league_get(&self, path: &str) -> Option<Value> {
+        if let Some(access) = self.remembered_league_dir().and_then(|d| read_lockfile(&d.join("lockfile"))) {
+            if let Ok(answer) = get(&access, path) {
+                return answer;
+            }
+        }
+        self.remember_league_dir(None);
+        get(&self.find_league()?, path).ok().flatten()
     }
 }
 
@@ -197,7 +243,8 @@ impl ClientApi for LocalApi {
         // The session route answers 404 while the client is still starting
         // and does not exist on old clients; the status route covers both.
         let Ok(rso) = get(&access, "/rso-auth/v1/session") else { return LoginState::Unknown };
-        let legacy = get(&access, "/riot-login/v1/status").ok().flatten();
+        // The second request is skipped when the first already says it all.
+        let legacy = if needs_legacy_status(rso.as_ref()) { get(&access, "/riot-login/v1/status").ok().flatten() } else { None };
         login_from(rso.as_ref(), legacy.as_ref())
     }
 
@@ -229,9 +276,8 @@ impl ClientApi for LocalApi {
     }
 
     fn league(&self) -> Option<LeagueInfo> {
-        let access = self.league_access()?;
-        let me = get(&access, "/lol-summoner/v1/current-summoner").ok().flatten()?;
-        let stats = get(&access, "/lol-ranked/v1/current-ranked-stats").ok().flatten().unwrap_or(Value::Null);
+        let me = self.league_get("/lol-summoner/v1/current-summoner")?;
+        let stats = self.league_get("/lol-ranked/v1/current-ranked-stats").unwrap_or(Value::Null);
         Some(LeagueInfo {
             puuid: text(&me, "puuid"),
             riot_id: riot_id(text(&me, "gameName"), text(&me, "tagLine")),
@@ -241,8 +287,7 @@ impl ClientApi for LocalApi {
     }
 
     fn league_phase(&self) -> Option<String> {
-        let access = self.league_access()?;
-        let phase = get(&access, "/lol-gameflow/v1/gameflow-phase").ok().flatten()?;
+        let phase = self.league_get("/lol-gameflow/v1/gameflow-phase")?;
         phase.as_str().map(String::from)
     }
 }
@@ -272,6 +317,17 @@ mod tests {
         assert_eq!(login_from(None, Some(&legacy)), LoginState::SignedIn { persist: Some(false) });
         // Still starting: neither route has an answer.
         assert_eq!(login_from(None, None), LoginState::SignedOut);
+    }
+
+    #[test]
+    fn the_old_status_route_is_asked_only_when_it_can_add_something() {
+        // Signed out, or signed in with the box reported: one request is enough.
+        assert!(!needs_legacy_status(Some(&json!({"type": "needs_authentication"}))));
+        assert!(!needs_legacy_status(Some(&json!({"type": "authenticated", "persistLogin": false}))));
+        // Signed in without a word about the box, an old client, a starting client.
+        assert!(needs_legacy_status(Some(&json!({"type": "authenticated"}))));
+        assert!(needs_legacy_status(Some(&json!({}))));
+        assert!(needs_legacy_status(None));
     }
 
     #[test]

@@ -211,6 +211,20 @@ impl Vault {
         Ok(())
     }
 
+    /// Whether `blob` is sealed the way this vault seals right now: with
+    /// the current key when the lock is on, without one when it is off.
+    /// `None` when that cannot be told, because the lock is on and closed.
+    pub fn sealed_for_now(&self, blob: &[u8]) -> Option<bool> {
+        let Ok(inner) = dpapi::unprotect(blob) else { return Some(false) };
+        let inner = Zeroizing::new(inner);
+        match (inner.split_first(), self.enabled()) {
+            (Some((&PLAIN, _)), enabled) => Some(!enabled),
+            (Some((&LOCKED, _)), false) => Some(false),
+            (Some((&LOCKED, rest)), true) => self.key().as_ref().map(|key| decrypt(key, rest).is_ok()),
+            _ => Some(false),
+        }
+    }
+
     pub fn seal(&self, plain: &[u8]) -> Result<Vec<u8>, VaultError> {
         if !self.enabled() {
             return Ok(seal_with(None, plain)?);

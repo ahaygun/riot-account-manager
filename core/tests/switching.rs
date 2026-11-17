@@ -468,6 +468,75 @@ fn password_only_account_starts_signed_out_and_types() {
 }
 
 #[test]
+fn password_only_account_does_not_wait_out_the_session_grace() {
+    let mut f = fixture("pw-fast");
+    // Long enough that waiting it out in full would be plain to see.
+    f.sw.timing.signed_out_grace = Duration::from_secs(2);
+    f.w.sim().accepts = Some(("hunter2".into(), "puuid-P".into()));
+    let acc = f.sw.add_with_credentials("Şifreli", "user", "hunter2", Game::Lol).unwrap();
+    f.sw.switch(&acc.id, None).unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
+    assert!(started.elapsed() < Duration::from_millis(1500), "typed after a quarter of the grace: {:?}", started.elapsed());
+    assert_eq!(f.w.sim().typed.len(), 1);
+}
+
+#[test]
+fn an_expired_saved_session_still_gets_the_full_grace() {
+    let mut f = fixture("grace-full");
+    two_accounts(&f);
+    f.sw.set_credentials("ana-hesap", "ana_user", "s3cret").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
+    f.w.renew("expired-A");
+    f.sw.switch("smurf", None).unwrap();
+
+    f.sw.timing.signed_out_grace = Duration::from_millis(600);
+    f.w.sim().accepts = Some(("s3cret".into(), "puuid-A".into()));
+    f.sw.switch("ana-hesap", None).unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn);
+    assert!(started.elapsed() >= Duration::from_millis(600), "{:?}", started.elapsed());
+}
+
+#[test]
+fn idle_sync_reads_the_session_files_only_when_something_was_written() {
+    let f = fixture("idle-gate");
+    two_accounts(&f);
+    let hash = |f: &Fixture| f.sw.view().unwrap().accounts[1].account.hash.clone();
+    // Smurf is signed in; the user quits the client, which renews the session.
+    f.w.boot();
+    f.w.renew("B-2");
+    f.w.stop(true);
+    assert_eq!(f.sw.sync_idle().unwrap().as_deref(), Some("smurf"), "the renewed session is filed");
+    let filed = hash(&f);
+
+    // Proof that later rounds do not read the files: content changed behind
+    // an unchanged size and time of writing goes unnoticed.
+    let path = f.root.join("riot").join(SETTINGS);
+    let written = fs::metadata(&path).unwrap().modified().unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, text.replace("B-2", "B-9")).unwrap();
+    fs::File::options().write(true).open(&path).unwrap().set_modified(written).unwrap();
+    for _ in 0..3 {
+        assert_eq!(f.sw.sync_idle().unwrap(), None);
+    }
+    assert_eq!(hash(&f), filed);
+
+    // The client runs again and quits with a newer session: picked up.
+    f.w.boot();
+    f.w.renew("B-3");
+    f.w.stop(true);
+    assert_eq!(f.sw.sync_idle().unwrap().as_deref(), Some("smurf"));
+    let newer = hash(&f);
+    assert_ne!(newer, filed);
+
+    // An edit of the account list alone gets one fresh look, and finds nothing.
+    f.sw.rename("smurf", "Smurf 2").unwrap();
+    assert_eq!(f.sw.sync_idle().unwrap(), None);
+    assert_eq!(hash(&f), newer);
+}
+
+#[test]
 fn await_login_can_be_cancelled() {
     let f = fixture("cancel");
     two_accounts(&f);
@@ -759,4 +828,236 @@ fn an_unreadable_league_client_blocks_until_the_user_insists() {
     f.w.sim().running.push("LeagueClientUx.exe".into());
     f.w.sim().phase = Some("ChampSelect".into());
     assert!(matches!(f.sw.switch_with("smurf", None, true), Err(Error::InMatchmaking(_))));
+}
+
+// ---- whose session is it ------------------------------------------------------
+
+#[test]
+fn a_hand_login_to_an_unsaved_account_never_overwrites_a_saved_one() {
+    let f = fixture("live-stranger");
+    two_accounts(&f); // Smurf was put in place last; the client is closed
+    let smurf = f.sw.view().unwrap().accounts[1].account.clone();
+    // The app sits in the tray. The user opens Riot Client and signs in to
+    // an account the app does not know, with "stay signed in".
+    f.w.sign_in_by_hand("puuid-C", "C-1", true);
+    assert!(f.sw.observe_live().unwrap(), "seen: nobody we know");
+    assert!(!f.sw.observe_live().unwrap(), "and noted once");
+    f.w.stop(true);
+    assert_eq!(f.sw.sync_idle().unwrap(), None, "not filed under Smurf");
+    let v = f.sw.view().unwrap();
+    assert_eq!(v.accounts[1].account.hash, smurf.hash, "Smurf's saved session is untouched");
+    assert!(v.unsaved_session && v.active.is_none(), "offered for saving instead");
+    // And Smurf still signs in as Smurf.
+    f.sw.switch("smurf", None).unwrap();
+    assert_eq!(f.w.sim().signed_in.as_ref().unwrap().0, "puuid-B");
+}
+
+#[test]
+fn a_hand_login_to_another_saved_account_is_filed_under_that_account() {
+    let f = fixture("live-known");
+    two_accounts(&f); // current: Smurf
+    f.sw.new_login().unwrap();
+    f.w.sign_in_by_hand("puuid-A", "A-7", true);
+    assert!(f.sw.observe_live().unwrap());
+    f.w.stop(true);
+    assert_eq!(f.sw.sync_idle().unwrap().as_deref(), Some("ana-hesap"));
+    assert_eq!(f.sw.view().unwrap().active.as_deref(), Some("ana-hesap"));
+    f.sw.switch("smurf", None).unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert!(f.w.live_token().contains("A-7"), "the renewed session went to its own account");
+}
+
+#[test]
+fn a_token_naming_a_saved_account_decides_where_a_closed_session_goes() {
+    let f = fixture("hint");
+    let ana = "b639ec2f-e2a0-509a-85f2-ffbec2526938";
+    f.w.sign_in_by_hand(ana, "A-1", true);
+    f.sw.capture_new("Ana Hesap", Game::Lol).unwrap();
+    f.sw.new_login().unwrap();
+    f.w.sign_in_by_hand("puuid-B", "B-1", true);
+    f.sw.capture_new("Smurf", Game::Lol).unwrap(); // current: Smurf, client closed
+    let smurf = f.sw.view().unwrap().accounts[1].account.hash.clone();
+
+    // While the app was not running, Ana signed in by hand and quit. The
+    // file does not carry the account id as such, but its id token does.
+    let jwt = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJiNjM5ZWMyZi1lMmEwLTUwOWEtODVmMi1mZmJlYzI1MjY5MzgiLCJ4IjoxfQ.c2ln";
+    let path = f.root.join("riot").join(SETTINGS);
+    fs::write(&path, format!("psl:\n    authorization:\n        riot-client:\n            id_token: \"{jwt}\"\n            refresh_token: \"A-2\"\n")).unwrap();
+    assert_eq!(f.sw.sync_idle().unwrap().as_deref(), Some("ana-hesap"));
+    assert_eq!(f.sw.view().unwrap().accounts[1].account.hash, smurf);
+}
+
+#[test]
+fn a_snapshot_that_signs_in_as_someone_else_is_thrown_away() {
+    let f = fixture("foreign");
+    two_accounts(&f);
+    // The one case nothing can see: the app was not running while a third
+    // account signed in by hand and quit. Its session lands on Smurf.
+    f.w.sign_in_by_hand("puuid-C", "C-1", true);
+    f.w.stop(true);
+    assert_eq!(f.sw.sync_idle().unwrap().as_deref(), Some("smurf"));
+
+    // The next switch to Smurf finds out, and does not leave it that way.
+    f.sw.switch("ana-hesap", None).unwrap();
+    f.sw.switch("smurf", None).unwrap();
+    let outcome = f.sw.await_login("smurf", None, &never).unwrap();
+    assert!(matches!(&outcome, LoginOutcome::NeedsLogin(why) if why.contains("yanlış kayıt silindi")), "{outcome:?}");
+    let v = f.sw.view().unwrap();
+    let smurf = &v.accounts[1];
+    assert!(smurf.account.needs_login && !smurf.has_session);
+    assert_eq!(v.security.saved_sessions, 1, "only Ana's is left");
+    assert!(v.active.is_none() && v.unsaved_session, "the stranger is shown as what it is");
+    // Smurf's own id is kept, so a later hand sign-in to Smurf repairs it.
+    assert_eq!(smurf.account.puuid.as_deref(), Some("puuid-B"));
+}
+
+// ---- sessions that go unused ---------------------------------------------------
+
+#[test]
+fn a_session_that_went_unused_is_flagged_until_it_is_used_again() {
+    let mut f = fixture("stale");
+    two_accounts(&f);
+    let day = 86_400;
+    let t0 = 1_800_000_000u64;
+    let clock = Arc::new(std::sync::atomic::AtomicU64::new(t0));
+    let c = clock.clone();
+    f.sw.clock = Arc::new(move || c.load(std::sync::atomic::Ordering::SeqCst));
+    // Both are used today.
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn);
+    f.sw.switch("smurf", None).unwrap();
+    assert_eq!(f.sw.await_login("smurf", None, &never).unwrap(), LoginOutcome::SignedIn);
+
+    clock.store(t0 + 6 * day, std::sync::atomic::Ordering::SeqCst);
+    let v = f.sw.view().unwrap();
+    assert_eq!(v.accounts[0].idle_days, Some(6));
+    assert!(!v.accounts[0].stale, "six days: not yet");
+    assert_eq!(v.accounts[1].idle_days, None, "signed in right now");
+
+    clock.store(t0 + 9 * day, std::sync::atomic::Ordering::SeqCst);
+    let v = f.sw.view().unwrap();
+    assert!(v.accounts[0].stale && !v.accounts[1].stale);
+
+    // Using it clears the warning; the other one starts to age.
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn);
+    clock.store(t0 + 10 * day, std::sync::atomic::Ordering::SeqCst);
+    let v = f.sw.view().unwrap();
+    assert!(!v.accounts[0].stale);
+    assert_eq!(v.accounts[1].idle_days, Some(1));
+
+    // Accounts that sign in by password have no session to go stale.
+    let p = f.sw.add_with_credentials("Şifreli", "u", "p", Game::Lol).unwrap();
+    clock.store(t0 + 90 * day, std::sync::atomic::Ordering::SeqCst);
+    let v = f.sw.view().unwrap();
+    let pw = v.accounts.iter().find(|a| a.account.id == p.id).unwrap();
+    assert!(pw.idle_days.is_none() && !pw.stale);
+}
+
+// ---- the lock closing by itself ------------------------------------------------
+
+#[test]
+fn the_app_locks_itself_after_going_unused() {
+    let f = fixture("autolock");
+    two_accounts(&f);
+    let min = |m: u64| Duration::from_secs(m * 60);
+    assert!(!f.sw.auto_lock_if_idle(min(600)), "no lock, nothing to close");
+    f.sw.set_lock(None, Some("correct horse")).unwrap();
+    assert_eq!(f.sw.view().unwrap().security.auto_lock_minutes, 15, "on by default");
+    assert!(!f.sw.auto_lock_if_idle(min(14)));
+    assert!(f.sw.auto_lock_if_idle(min(15)));
+    assert!(matches!(f.sw.switch("ana-hesap", None), Err(Error::Locked)));
+    assert!(!f.sw.auto_lock_if_idle(min(60)), "already closed");
+
+    assert!(f.sw.unlock("correct horse").unwrap());
+    f.sw.set_auto_lock_minutes(0).unwrap();
+    assert!(!f.sw.auto_lock_if_idle(min(6000)), "turned off");
+    f.sw.set_auto_lock_minutes(5).unwrap();
+    assert!(f.sw.auto_lock_if_idle(min(5)));
+}
+
+// ---- a change of the lock that was cut short -----------------------------------
+
+/// Every `.bin` under the data folder, by path.
+fn sealed_files(f: &Fixture) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    for dir in ["snapshots", "secrets"] {
+        for e in fs::read_dir(f.root.join("data").join(dir)).into_iter().flatten().flatten() {
+            if e.path().extension().is_some_and(|x| x == "bin") {
+                out.push((e.path(), fs::read(e.path()).unwrap()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Leaves the data folder as a cut-short change of the lock would: `old`
+/// still under the real names, `new` beside them as `.new`.
+fn cut_short(old: &[(PathBuf, Vec<u8>)], new: &[(PathBuf, Vec<u8>)]) {
+    for (path, bytes) in old {
+        fs::write(path, bytes).unwrap();
+    }
+    for (path, bytes) in new {
+        fs::write(path.with_extension("new"), bytes).unwrap();
+    }
+}
+
+fn no_leftovers(f: &Fixture) -> bool {
+    ["snapshots", "secrets"].iter().all(|dir| {
+        fs::read_dir(f.root.join("data").join(dir)).into_iter().flatten().flatten().all(|e| e.path().extension().is_some_and(|x| x == "bin"))
+    })
+}
+
+#[test]
+fn a_lock_change_cut_short_is_finished_or_undone_on_the_next_start() {
+    let f = fixture("relock");
+    two_accounts(&f);
+    f.sw.set_credentials("ana-hesap", "ana_user", "s3cret").unwrap();
+    let env = || Env { riot_games_dir: f.root.join("riot"), data_dir: f.root.join("data") };
+    let vault = f.root.join("data").join("vault.json");
+
+    let open = sealed_files(&f); // sealed without a master password
+    f.sw.set_lock(None, Some("correct horse")).unwrap();
+    let locked = sealed_files(&f); // sealed with it
+    let vault_file = fs::read(&vault).unwrap();
+    assert_eq!(open.len(), 3);
+
+    // 1. Turning the lock on, stopped before the lock itself was written:
+    //    the change did not happen, the half-made files go.
+    fs::remove_file(&vault).unwrap();
+    cut_short(&open, &locked);
+    let sw = switcher(env(), &f.w);
+    assert!(no_leftovers(&f));
+    assert_eq!(sealed_files(&f), open);
+    sw.switch("ana-hesap", None).unwrap();
+
+    // 2. Turning it on, stopped after the lock was written but before the
+    //    files took their names: finished once the password is given.
+    cut_short(&open, &locked);
+    fs::write(&vault, &vault_file).unwrap();
+    let sw = switcher(env(), &f.w);
+    assert!(!no_leftovers(&f), "locked: cannot tell yet, nothing is touched");
+    assert!(sw.unlock("correct horse").unwrap());
+    assert!(no_leftovers(&f));
+    assert_eq!(sealed_files(&f), locked, "everything is under the master password");
+    sw.switch("smurf", None).unwrap();
+
+    // 3. Turning it off, stopped before the lock was removed: still on,
+    //    and the unprotected copies are removed rather than used.
+    cut_short(&locked, &open);
+    let sw = switcher(env(), &f.w);
+    assert!(sw.unlock("correct horse").unwrap());
+    assert!(no_leftovers(&f));
+    assert_eq!(sealed_files(&f), locked);
+
+    // 4. Turning it off, stopped after the lock was removed: the files
+    //    under the old key could never be opened again; the new ones take over.
+    cut_short(&locked, &open);
+    fs::remove_file(&vault).unwrap();
+    let sw = switcher(env(), &f.w);
+    assert!(no_leftovers(&f));
+    assert_eq!(sealed_files(&f), open);
+    sw.switch("ana-hesap", None).unwrap();
+    assert!(sw.view().unwrap().accounts[0].has_password);
 }

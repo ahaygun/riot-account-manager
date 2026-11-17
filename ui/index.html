@@ -254,6 +254,16 @@
         </div>
         <div id="sec-lock-on" class="step" hidden>
           <button id="sec-lock-now" type="button">Şimdi kilitle</button>
+          <label for="sec-auto-lock">
+            <span>Kullanılmayınca kendiliğinden kilitle</span>
+            <select id="sec-auto-lock">
+              <option value="5">5 dakika sonra</option>
+              <option value="15">15 dakika sonra</option>
+              <option value="30">30 dakika sonra</option>
+              <option value="60">1 saat sonra</option>
+              <option value="0">Hiçbir zaman</option>
+            </select>
+          </label>
           <span class="row">
             <input id="sec-current" type="password" placeholder="Mevcut ana şifre" autocomplete="off">
             <button id="sec-disable" type="button">Kilidi kaldır</button>
