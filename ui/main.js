@@ -243,18 +243,19 @@ async function refresh() {
   if (!$("view-settings").hidden) fillSettings();
 }
 
-// `game` opens that game this once instead of the account's own.
-async function switchTo(a, game = null) {
+// `game` opens that game this once instead of the account's own. `force`
+// is the user's "switch anyway" after an unreadable League client state.
+async function switchTo(a, game = null, force = false) {
   if (busy) return;
   busy = a.id;
   say(`${a.name} açılıyor…`);
   render();
   try {
-    await invoke("switch_account", { id: a.id, game });
+    await invoke("switch_account", { id: a.id, game, force });
     say("");
     $("filter").value = "";
   } catch (e) {
-    reportSwitchError(e, a.id);
+    reportSwitchError(e, a.id, game);
   } finally {
     busy = null;
     await refresh();
@@ -263,8 +264,12 @@ async function switchTo(a, game = null) {
 
 // A switch refused because a match is on can be queued instead; one
 // refused because the app is locked continues after unlocking.
-function reportSwitchError(e, id) {
+function reportSwitchError(e, id, game = null) {
   if (errorKind(e) === "locked") return openUnlock(id);
+  if (errorKind(e) === "league_unknown") {
+    const a = view.accounts.find((x) => x.id === id);
+    return say(errorText(e), true, a && { label: "Yine de geç", run: () => { say(""); switchTo(a, game, true); } });
+  }
   if (errorKind(e) !== "in_game") return say(errorText(e), true);
   say(`${errorText(e)} Oyun kapanınca geçilsin mi?`, true, {
     label: "Kapanınca geç",
@@ -890,7 +895,7 @@ listen("update-progress", (e) => {
 });
 listen("notice", (e) => {
   const n = e.payload;
-  if ((n.kind === "in_game" || n.kind === "locked") && n.account) reportSwitchError({ kind: n.kind, message: n.text }, n.account);
+  if (["in_game", "locked", "league_unknown"].includes(n.kind) && n.account) reportSwitchError({ kind: n.kind, message: n.text }, n.account);
   else say(n.text, n.error);
 });
 window.addEventListener("focus", () => {

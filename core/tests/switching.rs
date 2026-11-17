@@ -734,3 +734,29 @@ fn window_hotkey_cannot_take_an_account_hotkey() {
     f.sw.set_window_hotkey("Ctrl+Shift+KeyQ").unwrap();
     assert_eq!(f.sw.config().unwrap().window_hotkey, "Ctrl+Shift+KeyQ");
 }
+
+#[test]
+fn an_unreadable_league_client_blocks_until_the_user_insists() {
+    let f = fixture("unknownphase");
+    two_accounts(&f);
+    f.sw.switch("smurf", None).unwrap();
+    f.w.sim().running.push("LeagueClientUx.exe".into());
+    f.w.sim().phase = None; // running, but its local interface does not answer
+    assert!(f.sw.in_game(), "a queued switch waits");
+    let quits = f.w.sim().quits;
+    let err = f.sw.switch("ana-hesap", None).unwrap_err();
+    assert_eq!(err.kind(), "league_unknown");
+    assert!(matches!(f.sw.new_login(), Err(Error::LeagueStateUnknown)));
+    assert_eq!(f.w.sim().quits, quits, "nothing was closed");
+    // The user says "switch anyway".
+    f.sw.switch_with("ana-hesap", None, true).unwrap();
+    assert!(f.w.live_token().contains("A-1"));
+    // "Anyway" never overrides a running match.
+    f.w.sim().running.push("League of Legends.exe".into());
+    assert!(matches!(f.sw.switch_with("smurf", None, true), Err(Error::InGame(_))));
+    // Nor a phase it can read.
+    f.w.sim().running.retain(|p| p != "League of Legends.exe");
+    f.w.sim().running.push("LeagueClientUx.exe".into());
+    f.w.sim().phase = Some("ChampSelect".into());
+    assert!(matches!(f.sw.switch_with("smurf", None, true), Err(Error::InMatchmaking(_))));
+}

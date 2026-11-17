@@ -89,12 +89,13 @@ fn notice(app: &AppHandle, text: impl Into<String>, error: bool) {
 
 /// The one place a switch happens, whoever asked for it.
 /// `game` overrides the account's own game for this one switch.
-fn do_switch(app: &AppHandle, target: &str, game: Option<Game>) -> CmdResult<String> {
+/// `force` overrides only an unreadable League client state.
+fn do_switch(app: &AppHandle, target: &str, game: Option<Game>, force: bool) -> CmdResult<String> {
     let shared = app.state::<Shared>();
     let (result, generation) = {
         let _ops = lock(&shared.ops);
         let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        (shared.sw.switch(target, game), generation)
+        (shared.sw.switch_with(target, game, force), generation)
     };
     changed(app);
     let switched = result?;
@@ -130,7 +131,7 @@ fn watch_login(app: AppHandle, id: String, game: Option<Game>, generation: u64) 
 fn switch_in_background(app: &AppHandle, target: String) {
     let app = app.clone();
     std::thread::spawn(move || {
-        if let Err(e) = do_switch(&app, &target, None) {
+        if let Err(e) = do_switch(&app, &target, None, false) {
             show_window(&app);
             let _ = app.emit("notice", Notice { text: e.message, error: true, kind: Some(e.kind), account: Some(target) });
         }
@@ -181,8 +182,8 @@ fn get_state(app: AppHandle) -> CmdResult<AppView> {
 }
 
 #[tauri::command(async)]
-fn switch_account(app: AppHandle, id: String, game: Option<Game>) -> CmdResult<String> {
-    let name = do_switch(&app, &id, game)?;
+fn switch_account(app: AppHandle, id: String, game: Option<Game>, force: Option<bool>) -> CmdResult<String> {
+    let name = do_switch(&app, &id, game, force.unwrap_or(false))?;
     hide_window(&app);
     Ok(name)
 }
@@ -559,7 +560,7 @@ fn background_loop(app: AppHandle) {
                 if clear_ticks >= 2 {
                     clear_ticks = 0;
                     *lock(&shared.pending) = None;
-                    if let Err(e) = do_switch(&app, &id, None) {
+                    if let Err(e) = do_switch(&app, &id, None, false) {
                         show_window(&app);
                         notice(&app, e.message, true);
                     }

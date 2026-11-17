@@ -126,6 +126,16 @@ fn riot_id(name: Option<String>, tag: Option<String>) -> Option<String> {
     }
 }
 
+fn running_league_dir() -> Option<PathBuf> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut sys = System::new().ok()?;
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_exe(UpdateKind::Always));
+    sys.processes()
+        .values()
+        .filter(|p| p.name().to_string_lossy().eq_ignore_ascii_case("LeagueClientUx.exe"))
+        .find_map(|p| p.exe().and_then(|e| e.parent()).map(PathBuf::from))
+}
+
 pub(crate) fn login_from(rso_session: Option<&Value>, legacy_status: Option<&Value>) -> LoginState {
     let legacy_persist = legacy_status.and_then(|v| v.get("persist")).and_then(Value::as_bool);
     if let Some(kind) = rso_session.and_then(|v| v.get("type")).and_then(Value::as_str) {
@@ -170,8 +180,14 @@ impl LocalApi {
         read_lockfile(&self.riot_games_dir.join("Riot Client").join("Config").join("lockfile"))
     }
 
+    /// The League client writes its lockfile next to its executable. The
+    /// running process says where that is, which also covers installs in
+    /// places Riot's install record does not list.
     fn league_access(&self) -> Option<Access> {
-        store::league_install_dirs().iter().find_map(|d| read_lockfile(&d.join("lockfile")))
+        running_league_dir()
+            .into_iter()
+            .chain(store::league_install_dirs())
+            .find_map(|d| read_lockfile(&d.join("lockfile")))
     }
 }
 

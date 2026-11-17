@@ -23,6 +23,8 @@ pub enum Error {
     /// The League client is in queue, a ready check or champion select:
     /// closing it now would leave the queue or count as a dodge.
     InMatchmaking(&'static str),
+    /// The League client is running but does not say what it is doing.
+    LeagueStateUnknown,
     /// Riot Client did not close.
     StillRunning(Vec<String>),
     /// Nobody is signed in.
@@ -56,6 +58,7 @@ impl Error {
         match self {
             Error::Io(_) => "io",
             Error::InGame(_) | Error::InMatchmaking(_) => "in_game",
+            Error::LeagueStateUnknown => "league_unknown",
             Error::StillRunning(_) => "still_running",
             Error::NoSession => "no_session",
             Error::NotPersisted => "not_persisted",
@@ -78,6 +81,10 @@ impl fmt::Display for Error {
             Error::Io(e) => write!(f, "Dosya hatası: {e}"),
             Error::InGame(p) => write!(f, "Oyun açık ({}). Oyun kapanmadan hesap değiştirilmez.", p.join(", ")),
             Error::InMatchmaking(what) => write!(f, "{what}; şimdi hesap değiştirmek seni sıradan çıkarır ya da maçtan kaçmış sayar."),
+            Error::LeagueStateUnknown => write!(
+                f,
+                "League istemcisi açık ama sırada ya da şampiyon seçiminde olup olmadığı okunamadı. Emin değilsen bekle; maçta olmadığından eminsen yine de geçebilirsin."
+            ),
             Error::StillRunning(p) => write!(f, "Riot Client kapatılamadı: {}", p.join(", ")),
             Error::NoSession => write!(f, "Riot Client'ta açık bir oturum yok."),
             Error::NotPersisted => write!(
@@ -409,9 +416,10 @@ impl Switcher {
         })
     }
 
-    /// A match is running, or the League client is on its way into one.
+    /// A match is running, or the League client is on its way into one,
+    /// or it cannot be told: a queued switch waits in all three cases.
     pub fn in_game(&self) -> bool {
-        self.config().map(|cfg| self.ensure_not_in_game(&cfg).is_err()).unwrap_or(false)
+        self.config().map(|cfg| self.ensure_not_in_game(&cfg, false).is_err()).unwrap_or(false)
     }
 
     pub fn account_name(&self, id: &str) -> Option<String> {
@@ -420,17 +428,27 @@ impl Switcher {
 
     // ---- closing the client and keeping its session -----------------------
 
-    fn ensure_not_in_game(&self, cfg: &Config) -> Result<()> {
+    /// Refuses while a match, a queue or champion select could be
+    /// interrupted. When the League client runs but its state cannot be
+    /// read, it refuses too, unless `force` (the user's explicit "switch
+    /// anyway"). A running game process is never overridden.
+    fn ensure_not_in_game(&self, cfg: &Config, force: bool) -> Result<()> {
         let games = self.procs.running(&cfg.game_processes);
         if !games.is_empty() {
             return Err(Error::InGame(games));
         }
         // Only asked when the League client runs, which is when it matters.
-        let league_up = !self.procs.running(&["LeagueClientUx.exe".to_string()]).is_empty();
-        if let Some(what) = league_up.then(|| self.api.league_phase()).flatten().as_deref().and_then(matchmaking) {
-            return Err(Error::InMatchmaking(what));
+        if self.procs.running(&["LeagueClientUx.exe".to_string()]).is_empty() {
+            return Ok(());
         }
-        Ok(())
+        match self.api.league_phase() {
+            Some(phase) => match matchmaking(&phase) {
+                Some(what) => Err(Error::InMatchmaking(what)),
+                None => Ok(()),
+            },
+            None if force => Ok(()),
+            None => Err(Error::LeagueStateUnknown),
+        }
     }
 
     /// Closes Riot Client the polite way first: only a proper quit makes it
@@ -519,7 +537,7 @@ impl Switcher {
             // What the client reports about the "stay signed in" box is not
             // relied on here: some versions report it wrongly. The file the
             // client writes when it quits is what decides, just below.
-            self.ensure_not_in_game(&cfg)?;
+            self.ensure_not_in_game(&cfg, false)?;
             self.close_client(&cfg)?;
         }
         let file = identity::read_file_session(&self.env.riot_games_dir);
@@ -576,7 +594,7 @@ impl Switcher {
         self.ensure_unlocked()?;
         let cfg = self.config()?;
         let exe = self.riot_exe(&cfg)?;
-        self.ensure_not_in_game(&cfg)?;
+        self.ensure_not_in_game(&cfg, false)?;
         let seen = self.live(&cfg).identity;
         self.close_client(&cfg)?;
         let _ = self.keep_live_session(&cfg, seen.as_ref());
@@ -592,6 +610,12 @@ impl Switcher {
     /// given, otherwise the account's own. Asking for another game on the
     /// account that is already signed in just starts that game.
     pub fn switch(&self, target: &str, game: Option<Game>) -> Result<Switched> {
+        self.switch_with(target, game, false)
+    }
+
+    /// `switch`, where `force` overrides only an unreadable League client
+    /// state (see `ensure_not_in_game`).
+    pub fn switch_with(&self, target: &str, game: Option<Game>, force: bool) -> Result<Switched> {
         self.ensure_unlocked()?;
         let cfg = self.config()?;
         let state = self.state()?;
@@ -614,7 +638,7 @@ impl Switcher {
             }
         }
 
-        self.ensure_not_in_game(&cfg)?;
+        self.ensure_not_in_game(&cfg, force)?;
         // Read the target first: if its snapshot is unreadable we stop
         // before closing anything.
         let snap = self.read_snapshot(&account.id)?;
