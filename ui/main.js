@@ -7,6 +7,10 @@ const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
 const GAME_NAMES = { lol: "League / TFT", valorant: "VALORANT", client: "Riot Client" };
+const GAME_SHORT = { lol: "LoL", valorant: "VAL" };
+// The games offered beside an account's own: its row opens its own game,
+// the small buttons open the others.
+const otherGames = (a) => Object.keys(GAME_SHORT).filter((g) => g !== a.game);
 
 let view = { accounts: [], active: null, client: {}, security: {}, unsaved_session: false, pending: null, autostart: false };
 let selected = 0;      // index into the filtered list
@@ -97,7 +101,7 @@ function render() {
   $("unsaved").hidden = !view.unsaved_session || isLocked;
   const queued = view.accounts.find((a) => a.id === view.pending);
   $("queue").hidden = !queued;
-  if (queued) $("queue-text").textContent = `Maç bitince "${queued.name}" hesabına geçilecek.`;
+  if (queued) $("queue-text").textContent = `Oyun kapanınca "${queued.name}" hesabına geçilecek.`;
   $("autostart").checked = !!view.autostart;
 }
 
@@ -148,7 +152,18 @@ function row(a, i) {
   more.title = "Ayarlar";
   more.addEventListener("click", () => openEdit(a.id));
 
-  li.append(go, more);
+  li.append(go);
+  for (const game of otherGames(a)) {
+    const alt = document.createElement("button");
+    alt.type = "button";
+    alt.className = "alt";
+    alt.textContent = GAME_SHORT[game];
+    alt.title = `${GAME_NAMES[game]} ile aç`;
+    alt.disabled = busy !== null;
+    alt.addEventListener("click", () => switchTo(a, game));
+    li.append(alt);
+  }
+  li.append(more);
   return li;
 }
 
@@ -172,13 +187,14 @@ async function refresh() {
   if (!$("view-security").hidden) fillSecurity();
 }
 
-async function switchTo(a) {
+// `game` opens that game this once instead of the account's own.
+async function switchTo(a, game = null) {
   if (busy) return;
   busy = a.id;
   say(`${a.name} açılıyor…`);
   render();
   try {
-    await invoke("switch_account", { id: a.id });
+    await invoke("switch_account", { id: a.id, game });
     say("");
     $("filter").value = "";
   } catch (e) {
@@ -194,8 +210,8 @@ async function switchTo(a) {
 function reportSwitchError(e, id) {
   if (errorKind(e) === "locked") return openUnlock(id);
   if (errorKind(e) !== "in_game") return say(errorText(e), true);
-  say(`${errorText(e)} Maç bitince geçilsin mi?`, true, {
-    label: "Maç bitince geç",
+  say(`${errorText(e)} Oyun kapanınca geçilsin mi?`, true, {
+    label: "Kapanınca geç",
     run: async () => {
       try {
         await invoke("queue_switch", { id });
@@ -218,7 +234,11 @@ document.addEventListener("keydown", (e) => {
   const accounts = visibleAccounts();
   if (e.key === "ArrowDown") selected = Math.min(selected + 1, accounts.length - 1);
   else if (e.key === "ArrowUp") selected = Math.max(selected - 1, 0);
-  else if (e.key === "Enter" && accounts[selected]) return void switchTo(accounts[selected]);
+  else if (e.key === "Enter" && accounts[selected]) {
+    // Shift+Enter opens the first other game.
+    const a = accounts[selected];
+    return void switchTo(a, e.shiftKey ? otherGames(a)[0] : null);
+  }
   else return;
   e.preventDefault();
   render();

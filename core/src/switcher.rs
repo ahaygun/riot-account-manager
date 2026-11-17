@@ -73,7 +73,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Io(e) => write!(f, "Dosya hatası: {e}"),
-            Error::InGame(p) => write!(f, "Maç devam ediyor ({}).", p.join(", ")),
+            Error::InGame(p) => write!(f, "Oyun açık ({}). Oyun kapanmadan hesap değiştirilmez.", p.join(", ")),
             Error::StillRunning(p) => write!(f, "Riot Client kapatılamadı: {}", p.join(", ")),
             Error::NoSession => write!(f, "Riot Client'ta açık bir oturum yok."),
             Error::NotPersisted => write!(
@@ -194,6 +194,8 @@ pub struct SecurityView {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Switched {
     pub account: Account,
+    /// The game that was started: the account's own, or the one asked for.
+    pub game: Game,
     /// The client was (re)started, so the sign-in should be watched with
     /// [`Switcher::await_login`].
     pub watch_login: bool,
@@ -557,26 +559,29 @@ impl Switcher {
 
     // ---- switching ---------------------------------------------------------
 
-    /// Signs in as `target` (an id or a name) and starts its game.
-    pub fn switch(&self, target: &str) -> Result<Switched> {
+    /// Signs in as `target` (an id or a name) and starts a game: `game` if
+    /// given, otherwise the account's own. Asking for another game on the
+    /// account that is already signed in just starts that game.
+    pub fn switch(&self, target: &str, game: Option<Game>) -> Result<Switched> {
         self.ensure_unlocked()?;
         let cfg = self.config()?;
         let state = self.state()?;
         let account = find(&state, target).cloned().ok_or_else(|| Error::UnknownAccount(target.to_string()))?;
+        let game = game.unwrap_or(account.game);
         let exe = self.riot_exe(&cfg)?;
         let live = self.live(&cfg);
 
         // Already this account: no need to close anything.
         if owner(&state, &live).is_some_and(|a| a.id == account.id) {
             if live.signed_in() {
-                if account.game != Game::Client && !self.api.start_product(account.game.product()) {
-                    self.procs.launch(&exe, &account.game.launch_args())?;
+                if game != Game::Client && !self.api.start_product(game.product()) {
+                    self.procs.launch(&exe, &game.launch_args())?;
                 }
-                return Ok(Switched { account, watch_login: false });
+                return Ok(Switched { account, game, watch_login: false });
             }
             if !live.running {
-                self.procs.launch(&exe, &account.game.launch_args())?;
-                return Ok(Switched { account, watch_login: true });
+                self.procs.launch(&exe, &game.launch_args())?;
+                return Ok(Switched { account, game, watch_login: true });
             }
         }
 
@@ -600,14 +605,15 @@ impl Switcher {
         }
         self.update(|state| state.current = Some(account.id.clone()))?;
 
-        self.procs.launch(&exe, &account.game.launch_args())?;
-        Ok(Switched { account, watch_login: true })
+        self.procs.launch(&exe, &game.launch_args())?;
+        Ok(Switched { account, game, watch_login: true })
     }
 
     /// After a switch: waits for Riot Client to come up and checks that the
     /// saved session was accepted. If it was not and a password is stored,
     /// types it. `cancelled` is polled between steps.
-    pub fn await_login(&self, id: &str, cancelled: &dyn Fn() -> bool) -> Result<LoginOutcome> {
+    /// `game` is the one the switch started, when it was not the account's own.
+    pub fn await_login(&self, id: &str, game: Option<Game>, cancelled: &dyn Fn() -> bool) -> Result<LoginOutcome> {
         let cfg = self.config()?;
         let t = &self.timing;
 
@@ -627,7 +633,7 @@ impl Switcher {
                 return Ok(LoginOutcome::Unknown);
             }
             match self.api.login() {
-                LoginState::SignedIn { .. } => return self.confirm_signed_in(id, false, cancelled),
+                LoginState::SignedIn { .. } => return self.confirm_signed_in(id, game, false, cancelled),
                 LoginState::SignedOut => {
                     if signed_out_since.get_or_insert_with(Instant::now).elapsed() >= t.signed_out_grace {
                         break;
@@ -654,7 +660,7 @@ impl Switcher {
             return Ok(LoginOutcome::Unknown);
         }
         if matches!(self.api.login(), LoginState::SignedIn { .. }) {
-            return self.confirm_signed_in(id, false, cancelled);
+            return self.confirm_signed_in(id, game, false, cancelled);
         }
         let exe = self.riot_exe(&cfg).ok();
         let target = UiTarget { processes: &cfg.ui_processes, install_dir: exe.as_deref().and_then(|e| e.parent()) };
@@ -668,7 +674,7 @@ impl Switcher {
                 return Ok(LoginOutcome::Unknown);
             }
             if matches!(self.api.login(), LoginState::SignedIn { .. }) {
-                return self.confirm_signed_in(id, true, cancelled);
+                return self.confirm_signed_in(id, game, true, cancelled);
             }
             std::thread::sleep(t.poll);
         }
@@ -681,11 +687,12 @@ impl Switcher {
     /// After `await_login` reported `NeedsLogin`: keeps watching for the
     /// user to sign in by hand, then clears the flag.
     pub fn await_manual_login(&self, id: &str, cancelled: &dyn Fn() -> bool) -> Result<LoginOutcome> {
+        let game = None;
         let cfg = self.config()?;
         let start = Instant::now();
         while start.elapsed() < self.timing.manual_wait && !cancelled() {
             match self.api.login() {
-                LoginState::SignedIn { .. } => return self.confirm_signed_in(id, false, cancelled),
+                LoginState::SignedIn { .. } => return self.confirm_signed_in(id, game, false, cancelled),
                 LoginState::Unknown if self.procs.running(&cfg.client_processes).is_empty() => break,
                 _ => {}
             }
@@ -694,7 +701,7 @@ impl Switcher {
         Ok(LoginOutcome::Unknown)
     }
 
-    fn confirm_signed_in(&self, id: &str, typed: bool, cancelled: &dyn Fn() -> bool) -> Result<LoginOutcome> {
+    fn confirm_signed_in(&self, id: &str, started: Option<Game>, typed: bool, cancelled: &dyn Fn() -> bool) -> Result<LoginOutcome> {
         let seen = self.api.identity().unwrap_or_default();
         let game = self.update_account(id, |acc, _| {
             if let (Some(mine), Some(theirs)) = (&acc.puuid, &seen.puuid) {
@@ -707,7 +714,8 @@ impl Switcher {
             acc.riot_id = seen.riot_id.clone().or(acc.riot_id.take());
             Ok(Some(acc.game))
         })?;
-        let Some(game) = game else { return Ok(LoginOutcome::Unknown) };
+        let Some(own_game) = game else { return Ok(LoginOutcome::Unknown) };
+        let game = started.unwrap_or(own_game);
 
         // After a typed login the client often stays on its home page
         // instead of starting the game it was launched for; nudge it once.

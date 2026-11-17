@@ -253,18 +253,18 @@ fn switches_and_keeps_renewed_sessions() {
     let f = fixture("two");
     two_accounts(&f);
 
-    let r = f.sw.switch("ana-hesap").unwrap();
+    let r = f.sw.switch("ana-hesap", None).unwrap();
     assert!(r.watch_login);
     assert!(f.w.live_token().contains("A-1"));
     assert_eq!(f.w.sim().launches.last().unwrap()[0], "--launch-product=league_of_legends");
-    assert_eq!(f.sw.await_login("ana-hesap", &never).unwrap(), LoginOutcome::SignedIn);
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn);
     assert_eq!(f.sw.view().unwrap().active.as_deref(), Some("ana-hesap"));
 
     // Riot renews A's session while playing; it only reaches disk on quit.
     f.w.renew("A-2");
-    f.sw.switch("smurf").unwrap(); // by id
+    f.sw.switch("smurf", None).unwrap(); // by id
     assert!(f.w.live_token().contains("B-1"));
-    f.sw.switch("Ana Hesap").unwrap(); // by name, as a desktop shortcut would
+    f.sw.switch("Ana Hesap", None).unwrap(); // by name, as a desktop shortcut would
     assert!(f.w.live_token().contains("A-2"), "renewed session was kept on the way out");
 }
 
@@ -272,11 +272,11 @@ fn switches_and_keeps_renewed_sessions() {
 fn the_lockfile_is_never_stored_or_restored() {
     let f = fixture("lockfile");
     two_accounts(&f);
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     f.w.stop(true);
     assert!(f.w.riot.join("Riot Client/Config/RiotClientSettings.yaml").is_file());
     fs::remove_file(f.w.riot.join("Riot Client/Config/lockfile")).unwrap();
-    f.sw.switch("smurf").unwrap();
+    f.sw.switch("smurf", None).unwrap();
     assert!(!f.w.riot.join("Riot Client/Config/lockfile").exists());
     assert_eq!(
         fs::read_to_string(f.w.riot.join("Riot Client/Config/RiotClientSettings.yaml")).unwrap(),
@@ -288,15 +288,15 @@ fn the_lockfile_is_never_stored_or_restored() {
 fn a_hand_login_to_an_unknown_account_is_not_filed_under_another() {
     let f = fixture("stranger");
     two_accounts(&f);
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     // The user signs out and into a third account inside Riot Client.
     f.w.sign_in_by_hand("puuid-C", "C-1", true);
     let v = f.sw.view().unwrap();
     assert_eq!(v.active, None);
     assert!(v.unsaved_session);
 
-    f.sw.switch("smurf").unwrap();
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("smurf", None).unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     assert!(f.w.live_token().contains("A-1"), "A still holds A's session, not C's");
 }
 
@@ -304,10 +304,10 @@ fn a_hand_login_to_an_unknown_account_is_not_filed_under_another() {
 fn already_signed_in_only_starts_the_game() {
     let f = fixture("same");
     two_accounts(&f);
-    f.sw.switch("smurf").unwrap();
+    f.sw.switch("smurf", None).unwrap();
     let quits = f.w.sim().quits;
     let launches = f.w.sim().launches.len();
-    let r = f.sw.switch("smurf").unwrap();
+    let r = f.sw.switch("smurf", None).unwrap();
     assert!(!r.watch_login);
     assert_eq!(f.w.sim().quits, quits, "client was not restarted");
     assert_eq!(f.w.sim().launches.len(), launches);
@@ -318,11 +318,11 @@ fn already_signed_in_only_starts_the_game() {
 fn refuses_during_a_match_and_touches_nothing() {
     let f = fixture("ingame");
     two_accounts(&f);
-    f.sw.switch("smurf").unwrap();
+    f.sw.switch("smurf", None).unwrap();
     f.w.sim().running.push("League of Legends.exe".into());
     assert!(f.sw.view().unwrap().in_game);
     let quits = f.w.sim().quits;
-    assert!(matches!(f.sw.switch("ana-hesap"), Err(Error::InGame(_))));
+    assert!(matches!(f.sw.switch("ana-hesap", None), Err(Error::InGame(_))));
     assert_eq!(f.w.sim().quits, quits);
     assert!(f.w.live_token().contains("B-1"));
 }
@@ -331,9 +331,9 @@ fn refuses_during_a_match_and_touches_nothing() {
 fn stops_if_the_client_will_not_close() {
     let f = fixture("stuck");
     two_accounts(&f);
-    f.sw.switch("smurf").unwrap();
+    f.sw.switch("smurf", None).unwrap();
     f.w.sim().unkillable = true;
-    assert!(matches!(f.sw.switch("ana-hesap"), Err(Error::StillRunning(_))));
+    assert!(matches!(f.sw.switch("ana-hesap", None), Err(Error::StillRunning(_))));
     assert!(f.w.live_token().contains("B-1"));
 }
 
@@ -341,13 +341,13 @@ fn stops_if_the_client_will_not_close() {
 fn killed_client_falls_back_to_the_last_saved_session() {
     let f = fixture("kill");
     two_accounts(&f);
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     f.w.renew("A-2");
     // The polite quit is refused; the client gets killed and writes nothing.
     f.w.sim().unkillable = false;
     f.w.kill(&["RiotClientServices.exe".to_string()]);
-    f.sw.switch("smurf").unwrap();
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("smurf", None).unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     assert!(f.w.live_token().contains("A-1"));
 }
 
@@ -355,26 +355,26 @@ fn killed_client_falls_back_to_the_last_saved_session() {
 fn expired_session_without_password_is_flagged_then_cleared_by_a_hand_login() {
     let f = fixture("expired");
     two_accounts(&f);
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     f.w.renew("expired-A"); // what gets saved will be rejected next time
-    f.sw.switch("smurf").unwrap();
+    f.sw.switch("smurf", None).unwrap();
 
-    f.sw.switch("ana-hesap").unwrap();
-    let out = f.sw.await_login("ana-hesap", &never).unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
+    let out = f.sw.await_login("ana-hesap", None, &never).unwrap();
     assert!(matches!(out, LoginOutcome::NeedsLogin(_)));
     assert!(f.sw.view().unwrap().accounts[0].account.needs_login);
     assert!(f.w.sim().typed.is_empty(), "nothing is typed without a stored password");
 
     // Leaving and coming back must not hide the flag.
-    f.sw.switch("smurf").unwrap();
+    f.sw.switch("smurf", None).unwrap();
     assert!(f.sw.view().unwrap().accounts[0].account.needs_login);
 
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     f.w.sign_in_by_hand("puuid-A", "A-9", true);
     assert_eq!(f.sw.await_manual_login("ana-hesap", &never).unwrap(), LoginOutcome::SignedIn);
     assert!(!f.sw.view().unwrap().accounts[0].account.needs_login);
-    f.sw.switch("smurf").unwrap();
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("smurf", None).unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     assert!(f.w.live_token().contains("A-9"), "the new session replaced the expired one");
 }
 
@@ -384,13 +384,13 @@ fn expired_session_with_password_signs_in_by_typing() {
     two_accounts(&f);
     f.sw.set_credentials("ana-hesap", "ana_user", "s3cret").unwrap();
     assert!(f.sw.view().unwrap().accounts[0].has_password);
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     f.w.renew("expired-A");
-    f.sw.switch("smurf").unwrap();
+    f.sw.switch("smurf", None).unwrap();
 
     f.w.sim().accepts = Some(("s3cret".into(), "puuid-A".into()));
-    f.sw.switch("ana-hesap").unwrap();
-    assert_eq!(f.sw.await_login("ana-hesap", &never).unwrap(), LoginOutcome::SignedIn);
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn);
     assert_eq!(f.w.sim().typed, [("ana_user".to_string(), "s3cret".to_string())]);
     assert!(f.w.sim().started_products.contains(&"league_of_legends".to_string()), "game was nudged to start");
     assert!(!f.sw.view().unwrap().accounts[0].account.needs_login);
@@ -401,18 +401,18 @@ fn wrong_password_or_lost_focus_ends_in_needs_login() {
     let f = fixture("badpw");
     two_accounts(&f);
     f.sw.set_credentials("ana-hesap", "ana_user", "wrong").unwrap();
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     f.w.renew("expired-A");
-    f.sw.switch("smurf").unwrap();
+    f.sw.switch("smurf", None).unwrap();
 
     f.w.sim().accepts = Some(("s3cret".into(), "puuid-A".into()));
-    f.sw.switch("ana-hesap").unwrap();
-    assert!(matches!(f.sw.await_login("ana-hesap", &never).unwrap(), LoginOutcome::NeedsLogin(_)));
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert!(matches!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::NeedsLogin(_)));
 
-    f.sw.switch("smurf").unwrap();
+    f.sw.switch("smurf", None).unwrap();
     f.w.sim().typer_error = Some("pencere yok".into());
-    f.sw.switch("ana-hesap").unwrap();
-    assert_eq!(f.sw.await_login("ana-hesap", &never).unwrap(), LoginOutcome::NeedsLogin("pencere yok".into()));
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::NeedsLogin("pencere yok".into()));
 }
 
 #[test]
@@ -422,10 +422,10 @@ fn password_only_account_starts_signed_out_and_types() {
     let c = f.sw.add_with_credentials("Üçüncü", "c_user", "pw-c", Game::Valorant).unwrap();
     assert_eq!(c.id, "nc"); // non-ASCII letters drop out of the id
     f.w.sim().accepts = Some(("pw-c".into(), "puuid-C".into()));
-    f.sw.switch(&c.id).unwrap();
+    f.sw.switch(&c.id, None).unwrap();
     assert_eq!(f.w.live_token(), "", "previous account's session is not left in place");
     assert_eq!(f.w.sim().launches.last().unwrap()[0], "--launch-product=valorant");
-    assert_eq!(f.sw.await_login(&c.id, &never).unwrap(), LoginOutcome::SignedIn);
+    assert_eq!(f.sw.await_login(&c.id, None, &never).unwrap(), LoginOutcome::SignedIn);
     let v = f.sw.view().unwrap();
     assert_eq!(v.active.as_deref(), Some("nc"));
     assert_eq!(v.accounts[2].account.puuid.as_deref(), Some("puuid-C"));
@@ -436,9 +436,9 @@ fn password_only_account_starts_signed_out_and_types() {
 fn await_login_can_be_cancelled() {
     let f = fixture("cancel");
     two_accounts(&f);
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     f.w.sim().signed_in = None;
-    assert_eq!(f.sw.await_login("ana-hesap", &|| true).unwrap(), LoginOutcome::Unknown);
+    assert_eq!(f.sw.await_login("ana-hesap", None, &|| true).unwrap(), LoginOutcome::Unknown);
     assert!(!f.sw.view().unwrap().accounts[0].account.needs_login);
 }
 
@@ -464,7 +464,7 @@ fn a_wrong_stay_signed_in_report_does_not_block_capture() {
     let a = f.sw.capture_new("Ana", Game::Lol).unwrap();
     assert_eq!(a.puuid.as_deref(), Some("puuid-A"));
     f.sw.new_login().unwrap();
-    f.sw.switch("ana").unwrap();
+    f.sw.switch("ana", None).unwrap();
     assert!(f.w.live_token().contains("A-1"));
     // Running again with tokens on disk, the view no longer repeats the wrong report.
     f.w.sim().misreport_persist = true;
@@ -475,7 +475,7 @@ fn a_wrong_stay_signed_in_report_does_not_block_capture() {
 fn capture_rejects_duplicates() {
     let f = fixture("dup");
     two_accounts(&f);
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     assert!(matches!(f.sw.capture_new("Yine A", Game::Lol), Err(Error::AlreadySaved(_))));
     f.sw.new_login().unwrap();
     f.w.sign_in_by_hand("puuid-C", "C-1", true);
@@ -486,7 +486,7 @@ fn capture_rejects_duplicates() {
 fn idle_sync_files_a_session_after_the_user_closes_the_client() {
     let f = fixture("idle");
     two_accounts(&f);
-    f.sw.switch("ana-hesap").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
     f.w.renew("A-2");
     assert_eq!(f.sw.sync_idle().unwrap(), None, "never while the client runs");
     f.w.stop(true); // user quits Riot Client
@@ -532,13 +532,13 @@ fn editing_accounts() {
     assert_eq!(v.accounts[0].account.hotkey, None);
     assert!(v.accounts[1].has_password);
 
-    f.sw.switch("Main").unwrap();
+    f.sw.switch("Main", None).unwrap();
     assert_eq!(f.w.sim().launches.last().unwrap()[0], "--launch-product=riot-client");
 
     f.sw.remove("smurf").unwrap();
     assert!(!f.sw.env.snapshot_file("smurf").exists());
     assert!(!f.sw.env.secret_file("smurf").exists());
-    assert!(matches!(f.sw.switch("smurf"), Err(Error::UnknownAccount(_))));
+    assert!(matches!(f.sw.switch("smurf", None), Err(Error::UnknownAccount(_))));
 }
 
 #[test]
@@ -559,7 +559,7 @@ fn app_lock_keeps_sessions_and_passwords_closed_until_unlocked() {
     assert!(v.security.lock_enabled && !v.security.unlocked);
     f.w.boot();
     let quits = f.w.sim().quits;
-    assert!(matches!(sw.switch("ana-hesap"), Err(Error::Locked)));
+    assert!(matches!(sw.switch("ana-hesap", None), Err(Error::Locked)));
     assert!(matches!(sw.new_login(), Err(Error::Locked)));
     assert!(matches!(sw.capture_new("X", Game::Lol), Err(Error::Locked)));
     assert!(matches!(sw.set_credentials("smurf", "u", "p"), Err(Error::Locked)));
@@ -567,13 +567,13 @@ fn app_lock_keeps_sessions_and_passwords_closed_until_unlocked() {
     assert_eq!(sw.sync_idle().unwrap(), None);
 
     assert!(!sw.unlock("wrong horse").unwrap());
-    assert!(matches!(sw.switch("ana-hesap"), Err(Error::Locked)));
+    assert!(matches!(sw.switch("ana-hesap", None), Err(Error::Locked)));
     assert!(sw.unlock("correct horse").unwrap());
-    sw.switch("ana-hesap").unwrap();
+    sw.switch("ana-hesap", None).unwrap();
     assert!(f.w.live_token().contains("A-1"), "session survived being re-encrypted");
 
     sw.lock_now();
-    assert!(matches!(sw.switch("smurf"), Err(Error::Locked)));
+    assert!(matches!(sw.switch("smurf", None), Err(Error::Locked)));
 }
 
 #[test]
@@ -590,20 +590,20 @@ fn changing_or_removing_the_lock_needs_the_current_password() {
     let sw = switcher(f.sw.env.clone(), &f.w);
     assert!(!sw.unlock("first password").unwrap());
     assert!(sw.unlock("second password").unwrap());
-    sw.switch("smurf").unwrap();
+    sw.switch("smurf", None).unwrap();
     assert!(f.w.live_token().contains("B-1"));
 
     sw.set_lock(Some("second password"), None).unwrap();
     let sw = switcher(f.sw.env.clone(), &f.w);
     assert!(!sw.view().unwrap().security.lock_enabled);
-    sw.switch("ana-hesap").unwrap();
+    sw.switch("ana-hesap", None).unwrap();
     assert!(f.w.live_token().contains("A-1"));
     // The stored password came through both re-encryptions.
     f.w.renew("expired-A");
-    sw.switch("smurf").unwrap();
+    sw.switch("smurf", None).unwrap();
     f.w.sim().accepts = Some(("s3cret".into(), "puuid-A".into()));
-    sw.switch("ana-hesap").unwrap();
-    assert_eq!(sw.await_login("ana-hesap", &never).unwrap(), LoginOutcome::SignedIn);
+    sw.switch("ana-hesap", None).unwrap();
+    assert_eq!(sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn);
     assert_eq!(f.w.sim().typed, [("ana_user".to_string(), "s3cret".to_string())]);
 }
 
@@ -613,7 +613,7 @@ fn wipe_removes_everything_of_ours_and_nothing_of_riots() {
     two_accounts(&f);
     f.sw.set_credentials("smurf", "u", "p").unwrap();
     f.sw.set_lock(None, Some("correct horse")).unwrap();
-    f.sw.switch("smurf").unwrap();
+    f.sw.switch("smurf", None).unwrap();
     f.w.stop(true);
     f.sw.wipe_all().unwrap();
     assert!(!f.sw.env.data_dir.exists());
@@ -622,4 +622,31 @@ fn wipe_removes_everything_of_ours_and_nothing_of_riots() {
     save_json(&f.sw.env.data_dir.join("config.json"), &Config { riot_client_exe: Some(f.root.join("x.exe")), ..Config::default() }).unwrap();
     let v = f.sw.view().unwrap();
     assert!(v.accounts.is_empty() && !v.security.lock_enabled && v.unsaved_session);
+}
+
+#[test]
+fn another_game_can_be_asked_for_without_changing_the_accounts_own() {
+    let f = fixture("othergame");
+    two_accounts(&f);
+    // Not signed in as A: full switch, but into VALORANT this once.
+    let r = f.sw.switch("ana-hesap", Some(Game::Valorant)).unwrap();
+    assert_eq!(r.game, Game::Valorant);
+    assert_eq!(f.w.sim().launches.last().unwrap()[0], "--launch-product=valorant");
+    assert_eq!(f.sw.view().unwrap().accounts[0].account.game, Game::Lol, "the account's own game is unchanged");
+
+    // Already signed in as A: asking for League just starts it, no restart.
+    let quits = f.w.sim().quits;
+    let r = f.sw.switch("ana-hesap", Some(Game::Lol)).unwrap();
+    assert!(!r.watch_login);
+    assert_eq!(f.w.sim().quits, quits);
+    assert_eq!(f.w.sim().started_products, ["league_of_legends"]);
+
+    // A typed login nudges the game that was asked for.
+    f.sw.set_credentials("ana-hesap", "ana_user", "s3cret").unwrap();
+    f.w.renew("expired-A");
+    f.sw.switch("smurf", None).unwrap();
+    f.w.sim().accepts = Some(("s3cret".into(), "puuid-A".into()));
+    f.sw.switch("ana-hesap", Some(Game::Valorant)).unwrap();
+    assert_eq!(f.sw.await_login("ana-hesap", Some(Game::Valorant), &never).unwrap(), LoginOutcome::SignedIn);
+    assert_eq!(f.w.sim().started_products.last().unwrap(), "valorant");
 }

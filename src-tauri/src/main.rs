@@ -81,18 +81,19 @@ fn notice(app: &AppHandle, text: impl Into<String>, error: bool) {
 // ---- switching ---------------------------------------------------------------
 
 /// The one place a switch happens, whoever asked for it.
-fn do_switch(app: &AppHandle, target: &str) -> CmdResult<String> {
+/// `game` overrides the account's own game for this one switch.
+fn do_switch(app: &AppHandle, target: &str, game: Option<Game>) -> CmdResult<String> {
     let shared = app.state::<Shared>();
     let (result, generation) = {
         let _ops = lock(&shared.ops);
         let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        (shared.sw.switch(target), generation)
+        (shared.sw.switch(target, game), generation)
     };
     changed(app);
     let switched = result?;
     *lock(&shared.pending) = None;
     if switched.watch_login {
-        watch_login(app.clone(), switched.account.id.clone(), generation);
+        watch_login(app.clone(), switched.account.id.clone(), game, generation);
     }
     Ok(switched.account.name)
 }
@@ -100,11 +101,11 @@ fn do_switch(app: &AppHandle, target: &str) -> CmdResult<String> {
 /// Follows the sign-in after a switch on its own thread: flags an expired
 /// session, types the password if one is stored, and keeps watching for a
 /// sign-in by hand.
-fn watch_login(app: AppHandle, id: String, generation: u64) {
+fn watch_login(app: AppHandle, id: String, game: Option<Game>, generation: u64) {
     std::thread::spawn(move || {
         let shared = app.state::<Shared>();
         let cancelled = || shared.generation.load(Ordering::SeqCst) != generation;
-        match shared.sw.await_login(&id, &cancelled) {
+        match shared.sw.await_login(&id, game, &cancelled) {
             Ok(LoginOutcome::NeedsLogin(why)) => {
                 changed(&app);
                 notice(&app, why, true);
@@ -122,7 +123,7 @@ fn watch_login(app: AppHandle, id: String, generation: u64) {
 fn switch_in_background(app: &AppHandle, target: String) {
     let app = app.clone();
     std::thread::spawn(move || {
-        if let Err(e) = do_switch(&app, &target) {
+        if let Err(e) = do_switch(&app, &target, None) {
             show_window(&app);
             let _ = app.emit("notice", Notice { text: e.message, error: true, kind: Some(e.kind), account: Some(target) });
         }
@@ -153,8 +154,8 @@ fn get_state(app: AppHandle) -> CmdResult<AppView> {
 }
 
 #[tauri::command(async)]
-fn switch_account(app: AppHandle, id: String) -> CmdResult<String> {
-    let name = do_switch(&app, &id)?;
+fn switch_account(app: AppHandle, id: String, game: Option<Game>) -> CmdResult<String> {
+    let name = do_switch(&app, &id, game)?;
     hide_window(&app);
     Ok(name)
 }
@@ -423,7 +424,7 @@ fn background_loop(app: AppHandle) {
                 if clear_ticks >= 2 {
                     clear_ticks = 0;
                     *lock(&shared.pending) = None;
-                    if let Err(e) = do_switch(&app, &id) {
+                    if let Err(e) = do_switch(&app, &id, None) {
                         show_window(&app);
                         notice(&app, e.message, true);
                     }
