@@ -3189,6 +3189,7 @@ version = "0.3.5"
 dependencies = [
  "quickswitch-core",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
