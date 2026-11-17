@@ -117,6 +117,10 @@ pub struct Config {
     pub game_processes: Vec<String>,
     /// Processes that own the Riot Client window, for typing a login.
     pub ui_processes: Vec<String>,
+    /// Look for a newer version on start-up. This is the app's only
+    /// connection to the internet, and only exists in builds that were
+    /// made with an update signing key.
+    pub check_updates: bool,
 }
 
 impl Default for Config {
@@ -141,6 +145,7 @@ impl Default for Config {
             ]),
             game_processes: s(&["League of Legends.exe", "VALORANT-Win64-Shipping.exe"]),
             ui_processes: s(&["Riot Client.exe", "RiotClientUx.exe"]),
+            check_updates: true,
         }
     }
 }

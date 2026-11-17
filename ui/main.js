@@ -109,6 +109,9 @@ function render() {
   $("accounts").replaceChildren(...rows);
   $("footer-lock").classList.toggle("closed", !!view.security.lock_enabled);
 
+  const update = view.update || {};
+  $("update").hidden = !update.available;
+  if (update.available) $("update-text").textContent = `Yeni sürüm hazır: ${update.available}`;
   const isLocked = view.security.lock_enabled && !view.security.unlocked;
   $("locked").hidden = !isLocked;
   $("unsaved").hidden = !view.unsaved_session || isLocked;
@@ -556,6 +559,16 @@ $("locked-open").addEventListener("click", () => openUnlock(null));
 
 function fillSecurity() {
   const sec = view.security;
+  // What is said about the network depends on what this build can do.
+  const update = view.update || {};
+  $("sec-net").textContent = !update.supported
+    ? "Uygulama internete bağlanmaz. Yalnızca bu bilgisayardaki Riot Client ile konuşur."
+    : update.enabled
+      ? "Uygulamanın tek internet bağlantısı güncelleme denetimidir; aşağıdan kapatabilirsin. Bunun dışında yalnızca bu bilgisayardaki Riot Client ile konuşur."
+      : "Güncelleme denetimi kapalı: uygulama internete bağlanmaz. Yalnızca bu bilgisayardaki Riot Client ile konuşur.";
+  $("sec-update-card").hidden = !update.supported;
+  $("sec-update-on").checked = !!update.enabled;
+  $("sec-version").textContent = `Kurulu sürüm: ${view.version || ""}`;
   $("sec-counts").textContent =
     `${view.accounts.length} hesap, ${sec.saved_sessions} kayıtlı oturum, ${sec.saved_passwords} kayıtlı şifre.`;
   $("sec-path").textContent = sec.data_dir || "";
@@ -606,6 +619,26 @@ $("sec-lock-now").addEventListener("click", async () => {
   show("list");
   refresh();
 });
+$("sec-update-on").addEventListener("change", (e) => secCall("set_update_checks", { enabled: e.target.checked }, ""));
+$("sec-update-check").addEventListener("click", (e) =>
+  whileWorking(e.currentTarget, async () => {
+    try {
+      const found = await invoke("check_update_now");
+      secSay(found ? `Yeni sürüm bulundu: ${found}. Ana ekrandan kurabilirsin.` : "Kurulu sürüm güncel.");
+    } catch (err) {
+      secSay(errorText(err), true);
+    }
+    await refresh();
+  }));
+$("update-install").addEventListener("click", (e) =>
+  whileWorking(e.currentTarget, async () => {
+    say("Güncelleme indiriliyor ve doğrulanıyor…");
+    try {
+      await invoke("install_update"); // the app restarts on success
+    } catch (err) {
+      say(errorText(err), true);
+    }
+  }));
 $("sec-wipe").addEventListener("click", async (e) => {
   if (e.target.textContent !== "Emin misin? Geri alınamaz. Tekrar tıkla") {
     e.target.textContent = "Emin misin? Geri alınamaz. Tekrar tıkla"; // first click arms

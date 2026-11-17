@@ -13,6 +13,11 @@
       <input id="filter" type="text" placeholder="Hesap ara, Enter ile aç" autocomplete="off" spellcheck="false">
     </header>
 
+    <div id="update" class="banner accent" hidden>
+      <p id="update-text"></p>
+      <button id="update-install" type="button" class="primary">Güncelle</button>
+    </div>
+
     <div id="locked" class="banner accent" hidden>
       <p>Kilitli. Hesap değiştirmek için kilidi aç.</p>
       <button id="locked-open" type="button" class="primary">Kilidi aç</button>
@@ -177,7 +182,7 @@
       <div class="card">
         <h2>Verilerin bu bilgisayarda kalır</h2>
         <ul>
-          <li>Uygulama internete bağlanmaz. Yalnızca bu bilgisayardaki Riot Client ile konuşur.</li>
+          <li id="sec-net"></li>
           <li>Kayıtlı oturumlar, şifreler ve hesap listesi Windows hesabına bağlı şifrelenir. Başka bir kullanıcı ya da başka bir bilgisayar bu dosyaları açamaz.</li>
           <li>Kaydettiğin şifre bir daha ekranda gösterilmez; yalnızca Riot Client'ın giriş penceresine yazılır.</li>
         </ul>
@@ -188,6 +193,14 @@
         <p id="sec-counts"></p>
         <p id="sec-path" class="hint path"></p>
         <button id="sec-open" type="button">Klasörü göster</button>
+      </div>
+
+      <div class="card" id="sec-update-card" hidden>
+        <h2>Güncellemeler</h2>
+        <p class="hint">Uygulama açılışta GitHub'daki yayın sayfasına bakar. Yeni sürüm ancak sen onaylarsan ve imzası doğrulanırsa kurulur. Bu denetimde hesaplarınla ilgili hiçbir bilgi gönderilmez.</p>
+        <label class="check"><input id="sec-update-on" type="checkbox"> Yeni sürümleri denetle</label>
+        <button id="sec-update-check" type="button">Şimdi denetle</button>
+        <p id="sec-version" class="hint"></p>
       </div>
 
       <div class="card">

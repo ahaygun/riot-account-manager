@@ -19,7 +19,7 @@ Windows 10 ve 11'de çalışır. Kaldırmak için Windows'un **Uygulamalar** aya
 
 Testler: `cargo test --workspace`
 
-Yeni sürüm yayınlamak: sürüm numarasını `src-tauri/tauri.conf.json` içinde artırıp `main` dalına gönder. GitHub kurulum dosyasını kendisi derleyip Releases'e ekler.
+Yeni sürüm yayınlamak: sürüm numarasını `src-tauri/tauri.conf.json` içinde artırıp `main` dalına gönder. GitHub kurulum dosyasını kendisi derleyip Releases'e ekler. Otomatik güncellemeyi açmak için: [docs/UPDATES.md](docs/UPDATES.md).
 
 ## Hesap ekleme
 
@@ -60,7 +60,7 @@ Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 
 ## Güvenlik
 
-- Veriler `%LOCALAPPDATA%\QuickSwitch\` içinde, Windows hesabına bağlı şifreli durur. Uygulama internete bağlanmaz.
+- Veriler `%LOCALAPPDATA%\QuickSwitch\` içinde, Windows hesabına bağlı şifreli durur. Uygulamanın tek internet bağlantısı, açıksa güncelleme denetimidir.
 - İsteğe bağlı **uygulama kilidi** oturumları ve şifreleri ayrıca bir ana şifreyle şifreler; uygulama her başladığında bir kez sorulur.
 - Uygulamadaki **Güvenlik** ekranı neyin saklandığını gösterir, klasörü açar, kilidi yönetir ve tüm verileri siler.
 - Ayrıntılar ve sınırlar: [SECURITY.md](SECURITY.md).

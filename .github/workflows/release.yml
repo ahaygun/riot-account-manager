@@ -2,6 +2,15 @@
 #
 # To release: raise "version" in src-tauri/tauri.conf.json and push to main.
 # If no release exists for that version yet, this builds one and tags it.
+#
+# Auto-update is switched on by two repository settings (Settings > Secrets
+# and variables > Actions). With both present, the installer is signed, the
+# app is built with the updater enabled, and `latest.json` is published for
+# installed copies to find. Without them the app is built with no updater
+# and never goes online. See docs/UPDATES.md.
+#   variable  UPDATE_PUBKEY                        public key (not a secret)
+#   secret    TAURI_SIGNING_PRIVATE_KEY            private key
+#   secret    TAURI_SIGNING_PRIVATE_KEY_PASSWORD   its password
 name: Release
 
 on:
@@ -25,6 +34,7 @@ jobs:
         shell: bash
         run: |
           version=$(jq -r .version src-tauri/tauri.conf.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           if gh release view "v$version" >/dev/null 2>&1; then
             echo "v$version is already released; nothing to publish."
@@ -58,24 +68,61 @@ jobs:
       - name: Build installer
         if: steps.version.outputs.publish == 'true'
         shell: bash
+        env:
+          UPDATE_PUBKEY: ${{ vars.UPDATE_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           rm -rf target/release/bundle
-          tauri build
+          if [ -n "$UPDATE_PUBKEY" ] && [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "Update signing key found: building with auto-update."
+            jq -n --arg key "$UPDATE_PUBKEY" \
+              --arg url "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json" \
+              '{bundle: {createUpdaterArtifacts: true}, plugins: {updater: {pubkey: $key, endpoints: [$url]}}}' \
+              > "$RUNNER_TEMP/updater.json"
+            tauri build --config "$RUNNER_TEMP/updater.json"
+          else
+            echo "No update signing key configured: building without auto-update."
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            tauri build
+          fi
+
+      # What installed copies download to learn about this version. Only
+      # written when the installer was signed.
+      - name: Update manifest
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        run: |
+          cd target/release/bundle/nsis
+          exe=$(ls *-setup.exe)
+          if [ -f "$exe.sig" ]; then
+            jq -n --arg version "${{ steps.version.outputs.version }}" \
+              --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --arg signature "$(cat "$exe.sig")" \
+              --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/${{ steps.version.outputs.tag }}/$exe" \
+              '{version: $version, pub_date: $date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' \
+              > latest.json
+            cat latest.json
+          else
+            echo "Installer is not signed; no update manifest."
+          fi
 
       - name: Checksums
         if: steps.version.outputs.publish == 'true'
         shell: bash
         run: |
           cd target/release/bundle/nsis
-          sha256sum *.exe > SHA256SUMS.txt
+          sha256sum *-setup.exe > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Publish release
         if: steps.version.outputs.publish == 'true'
         shell: bash
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            target/release/bundle/nsis/*.exe target/release/bundle/nsis/SHA256SUMS.txt \
+          cd target/release/bundle/nsis
+          files=(*-setup.exe SHA256SUMS.txt)
+          [ -f latest.json ] && files+=(latest.json *-setup.exe.sig)
+          gh release create "${{ steps.version.outputs.tag }}" "${files[@]}" \
             --target "$GITHUB_SHA" \
             --title "QuickSwitch ${{ steps.version.outputs.tag }}" \
             --notes "Kurulum: aşağıdaki \`setup.exe\` dosyasını indirip çalıştır. Windows \"bilinmeyen yayıncı\" uyarısı gösterirse **Ek bilgi**, sonra **Yine de çalıştır**. Dosyanın bozulmadığını \`SHA256SUMS.txt\` ile karşılaştırabilirsin."

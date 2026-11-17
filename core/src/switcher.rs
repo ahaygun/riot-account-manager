@@ -319,6 +319,12 @@ impl Switcher {
         Ok(cfg)
     }
 
+    pub fn set_check_updates(&self, enabled: bool) -> Result<()> {
+        let mut cfg = self.config()?;
+        cfg.check_updates = enabled;
+        Ok(store::save_json(&self.env.data_dir.join("config.json"), &cfg)?)
+    }
+
     fn write_snapshot(&self, id: &str, snap: &Snapshot) -> Result<()> {
         let blob = self.vault.seal(&snap.encode())?;
         Ok(store::write_atomic(&self.env.snapshot_file(id), &blob)?)

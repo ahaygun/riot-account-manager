@@ -1,6 +1,6 @@
 [package]
 name = "quickswitch"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 
 [build-dependencies]
@@ -13,3 +13,4 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "zip"] }

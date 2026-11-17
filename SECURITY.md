@@ -22,10 +22,11 @@ Her şey `%LOCALAPPDATA%\QuickSwitch\` içinde durur. `Roaming` yerine `Local` s
 
 ## Ağ
 
-- Uygulama internete bağlanmaz. Telemetri, analiz, hata raporu yoktur.
-- Tek ağ trafiği `127.0.0.1` üzerindeki Riot Client ve League istemcisinin yerel arayüzüne gider (giriş durumu, hesap kimliği, lig, düzgün kapatma). Bu istekler sistem vekil sunucusu ayarlarını kullanmaz.
+- Telemetri, analiz ve hata raporu yoktur.
+- Uygulama `127.0.0.1` üzerindeki Riot Client ve League istemcisinin yerel arayüzüyle konuşur (giriş durumu, hesap kimliği, lig, düzgün kapatma). Bu istekler sistem vekil sunucusu ayarlarını kullanmaz.
+- **Güncelleme denetimi** uygulamanın tek internet bağlantısıdır ve yalnızca imza anahtarıyla derlenmiş sürümlerde bulunur. GitHub'daki yayın sayfasından küçük bir sürüm dosyası indirir; hesaplarla ilgili hiçbir bilgi göndermez. Güvenlik ekranından kapatılabilir. Güncelleme ancak kullanıcı onaylarsa ve imzası uygulamaya gömülü açık anahtarla doğrulanırsa kurulur. Ayrıntı: [docs/UPDATES.md](docs/UPDATES.md).
+- İmza anahtarı olmadan derlenmiş sürümlerde güncelleyici hiç yüklenmez ve uygulama internete bağlanmaz. Hangisinin kurulu olduğunu Güvenlik ekranının ilk maddesi söyler.
 - Arayüz yalnızca uygulamayla birlikte gelen dosyaları yükler; içerik güvenlik ilkesi uzak kaynakları engeller.
-- Otomatik güncelleme eklendiğinde bu bölüm değişecek: tek dış bağlantı o olacak, kapatılabilecek ve güncellemeler imza doğrulamasından geçecek.
 
 ## Şifreler
 

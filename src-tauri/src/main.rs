@@ -13,6 +13,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_updater::{Update, UpdaterExt};
 
 const TRAY_ID: &str = "main";
 /// Opens the picker from anywhere.
@@ -20,6 +21,9 @@ const TOGGLE_HOTKEY: &str = "Ctrl+Alt+KeyR";
 const TICK: Duration = Duration::from_secs(3);
 /// Upkeep (filing sessions, reading rank) runs every this many ticks.
 const UPKEEP_EVERY: u32 = 5;
+/// A newer version is looked for shortly after start and then this often.
+const UPDATE_FIRST_TICK: u32 = 4;
+const UPDATE_EVERY: u32 = 6 * 60 * 60 / 3;
 
 struct Shared {
     sw: Arc<Switcher>,
@@ -33,6 +37,11 @@ struct Shared {
     pending: Mutex<Option<String>>,
     /// Registered account hotkeys: shortcut id to account id.
     hotkeys: Mutex<HashMap<u32, String>>,
+    /// This build can update itself: it was made with a signing key, so
+    /// the updater is configured. Builds without one never go online.
+    can_update: bool,
+    /// A newer version that was found and is waiting for the user's go.
+    update: Mutex<Option<Update>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -139,17 +148,34 @@ struct AppView {
     pending: Option<String>,
     autostart: bool,
     version: &'static str,
+    update: UpdateView,
+}
+
+#[derive(Serialize)]
+struct UpdateView {
+    /// This build is able to update itself.
+    supported: bool,
+    /// The user has left update checks on.
+    enabled: bool,
+    /// Version waiting to be installed.
+    available: Option<String>,
 }
 
 #[tauri::command(async)]
 fn get_state(app: AppHandle) -> CmdResult<AppView> {
     let shared = app.state::<Shared>();
     let pending = lock(&shared.pending).clone();
+    let available = lock(&shared.update).as_ref().map(|u| u.version.clone());
     Ok(AppView {
         view: shared.sw.view()?,
         pending,
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
         version: env!("CARGO_PKG_VERSION"),
+        update: UpdateView {
+            supported: shared.can_update,
+            enabled: shared.sw.config().map(|c| c.check_updates).unwrap_or(true),
+            available,
+        },
     })
 }
 
@@ -309,6 +335,60 @@ fn open_data_dir(app: AppHandle) -> CmdResult<()> {
     }
 }
 
+// ---- updates --------------------------------------------------------------------
+//
+// The updater downloads `latest.json` from the project's GitHub releases,
+// and installs a newer installer only if its signature matches the public
+// key built into this app. Nothing is installed without the user's click.
+
+/// Looks for a newer version and remembers it. Returns its version.
+fn find_update(app: &AppHandle) -> Result<Option<String>, String> {
+    let shared = app.state::<Shared>();
+    if !shared.can_update {
+        return Ok(None);
+    }
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let found = tauri::async_runtime::block_on(updater.check()).map_err(|e| e.to_string())?;
+    let version = found.as_ref().map(|u| u.version.clone());
+    *lock(&shared.update) = found;
+    changed(app);
+    Ok(version)
+}
+
+#[tauri::command(async)]
+fn check_update_now(app: AppHandle) -> CmdResult<Option<String>> {
+    find_update(&app).map_err(|e| other(format!("Güncelleme denetlenemedi: {e}")))
+}
+
+#[tauri::command(async)]
+fn set_update_checks(app: AppHandle, enabled: bool) -> CmdResult<()> {
+    let shared = app.state::<Shared>();
+    shared.sw.set_check_updates(enabled)?;
+    if !enabled {
+        *lock(&shared.update) = None;
+    }
+    changed(&app);
+    Ok(())
+}
+
+/// Downloads the waiting update, verifies its signature, runs the
+/// installer and restarts into the new version.
+#[tauri::command(async)]
+fn install_update(app: AppHandle) -> CmdResult<()> {
+    let shared = app.state::<Shared>();
+    let Some(update) = lock(&shared.update).clone() else {
+        return Err(other("Kurulacak bir güncelleme yok."));
+    };
+    // Not in the middle of a switch, and not while a match is on.
+    let _ops = lock(&shared.ops);
+    if shared.sw.in_game() {
+        return Err(other("Oyun açıkken güncelleme kurulmaz."));
+    }
+    tauri::async_runtime::block_on(update.download_and_install(|_, _| {}, || {}))
+        .map_err(|e| other(format!("Güncelleme kurulamadı: {e}")))?;
+    app.restart();
+}
+
 // ---- hotkeys -------------------------------------------------------------------
 
 /// A hotkey must parse and must include Ctrl or Alt, so a plain letter can
@@ -433,6 +513,11 @@ fn background_loop(app: AppHandle) {
             _ => clear_ticks = 0,
         }
 
+        if shared.can_update && tick % UPDATE_EVERY == UPDATE_FIRST_TICK && shared.sw.config().map(|c| c.check_updates).unwrap_or(false) {
+            // Offline or no release yet: simply try again next time.
+            let _ = find_update(&app);
+        }
+
         if tick % UPKEEP_EVERY == 0 {
             // Skip the round if a switch is in progress.
             let Ok(_ops) = shared.ops.try_lock() else { continue };
@@ -462,8 +547,19 @@ fn main() {
     let api = Arc::new(LocalApi::new(env.riot_games_dir.clone()));
     let switcher = Switcher::new(env, Arc::new(SysProcs), api, Arc::new(WindowTyper));
 
-    tauri::Builder::default()
-        // Must be the first plugin. A second launch hands its arguments to
+    // The updater is only configured in release builds made with a signing
+    // key (see .github/workflows/release.yml). Without that configuration
+    // the plugin is not loaded at all.
+    let context = tauri::generate_context!();
+    let can_update = context.config().plugins.0.contains_key("updater");
+
+    let mut builder = tauri::Builder::default();
+    if can_update {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    builder
+        // Must be the first of the plugins below. A second launch hands its arguments to
         // the running app and exits, so desktop shortcuts stay instant.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| match switch_target(&argv) {
             Some(target) => switch_in_background(app, target),
@@ -485,6 +581,8 @@ fn main() {
             generation: AtomicU64::new(0),
             pending: Mutex::new(None),
             hotkeys: Mutex::new(HashMap::new()),
+            can_update,
+            update: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -506,7 +604,10 @@ fn main() {
             lock_now,
             set_lock,
             wipe_all,
-            open_data_dir
+            open_data_dir,
+            check_update_now,
+            set_update_checks,
+            install_update
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -553,7 +654,7 @@ fn main() {
                 let _ = window.hide();
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running QuickSwitch");
 }
 
