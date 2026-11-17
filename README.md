@@ -72,3 +72,10 @@ Riot bir güncellemede dosya ya da süreç adlarını değiştirirse `config.jso
 - `core/`: bütün mantık, arayüzden bağımsız. Riot Client'ın yerel arayüzü, süreçler ve klavye birer arayüzün arkasında durur; testler bunların sahteleriyle çalışır.
 - `src-tauri/`: pencere, tepsi, kısayollar, arka plan döngüsü.
 - `ui/`: düz HTML/CSS/JS, derleme adımı yok.
+
+## Yasal
+
+QuickSwitch, Riot Games tarafından onaylanmamıştır ve Riot Games ya da Riot Games mülklerinin üretiminde ya da yönetiminde resmî olarak yer alan kimseyin görüşlerini yansıtmaz. Riot Games, League of Legends ve VALORANT, Riot Games, Inc.'in ticari markalarıdır.
+
+Kaynak kod, ne yaptığını herkes görebilsin diye açıktır. Bir lisansla dağıtılmaz: tüm hakları saklıdır. Kodu incelemek serbesttir; kopyalamak, değiştirmek ya da dağıtmak için izin gerekir.
+
