@@ -53,9 +53,14 @@ jobs:
         if: steps.version.outputs.publish == 'true'
         run: npm install --global @tauri-apps/cli@2
 
+      # The cache can carry installers of earlier versions; start clean so
+      # only this version's file is published.
       - name: Build installer
         if: steps.version.outputs.publish == 'true'
-        run: tauri build
+        shell: bash
+        run: |
+          rm -rf target/release/bundle
+          tauri build
 
       - name: Checksums
         if: steps.version.outputs.publish == 'true'
