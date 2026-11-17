@@ -6,11 +6,11 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
-const GAME_NAMES = { lol: "League / TFT", valorant: "VALORANT", client: "Riot Client" };
+const GAME_NAMES = { lol: "League / TFT", valorant: "VALORANT", both: "League ve VALORANT", client: "Riot Client" };
 const GAME_SHORT = { lol: "LoL", valorant: "VAL" };
-// The games offered beside an account's own: its row opens its own game,
-// the small buttons open the others.
-const otherGames = (a) => Object.keys(GAME_SHORT).filter((g) => g !== a.game);
+// The game buttons on an account's row: one for its game, or one for each
+// when it plays both. The row itself opens the first.
+const rowGames = (a) => (a.game === "both" ? ["lol", "valorant"] : a.game in GAME_SHORT ? [a.game] : []);
 
 let view = { accounts: [], active: null, client: {}, security: {}, unsaved_session: false, pending: null, autostart: false };
 let selected = 0;      // index into the filtered list
@@ -155,7 +155,7 @@ function row(a, i) {
   if (a.rank) part(a.rank, "rank");
   else if (a.level) part("Derecesiz");
   if (a.level) part(`Seviye ${a.level}`);
-  if (a.game !== "lol") part(GAME_NAMES[a.game]);
+  if (a.game === "client") part(GAME_NAMES.client);
   if (a.riot_id) part(a.riot_id);
   if (!detail.childElementCount) part(a.has_session ? "Oturum kayıtlı" : "Şifreyle giriş");
 
@@ -169,7 +169,7 @@ function row(a, i) {
   more.addEventListener("click", () => openEdit(a.id));
 
   li.append(go);
-  for (const game of otherGames(a)) {
+  for (const game of rowGames(a)) {
     const alt = document.createElement("button");
     alt.type = "button";
     alt.className = "alt";
@@ -251,9 +251,9 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowDown") selected = Math.min(selected + 1, accounts.length - 1);
   else if (e.key === "ArrowUp") selected = Math.max(selected - 1, 0);
   else if (e.key === "Enter" && accounts[selected]) {
-    // Shift+Enter opens the first other game.
+    // For an account that plays both, Shift+Enter opens VALORANT.
     const a = accounts[selected];
-    return void switchTo(a, e.shiftKey ? otherGames(a)[0] : null);
+    return void switchTo(a, e.shiftKey && a.game === "both" ? "valorant" : null);
   }
   else return;
   e.preventDefault();

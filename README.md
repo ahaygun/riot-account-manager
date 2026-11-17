@@ -43,7 +43,7 @@ Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 
 ## Hesap ayarları (⋯)
 
-- Ad, açılacak oyun (League/TFT, VALORANT ya da yalnızca Riot Client), kısayol tuşu.
+- Ad, açılacak oyun (League/TFT, VALORANT, ikisi ya da yalnızca Riot Client), kısayol tuşu. "League ve VALORANT" seçilen hesabın satırında iki oyun için ayrı düğme çıkar; tepsi, kısayol tuşu ve masaüstü kısayolu League'i açar.
 - Otomatik giriş: şifre kaydedersen, oturumun süresi dolduğunda giriş ekranına kendisi yazar.
 - Masaüstü kısayolu, hesabı silme.
 

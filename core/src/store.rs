@@ -41,6 +41,9 @@ pub enum Game {
     #[default]
     Lol,
     Valorant,
+    /// The account plays both. The window offers each game separately;
+    /// anything that cannot ask (tray, hotkey, shortcut) opens League.
+    Both,
     /// Only Riot Client.
     Client,
 }
@@ -49,7 +52,7 @@ impl Game {
     /// Riot's product id, as used by `--launch-product`.
     pub fn product(self) -> &'static str {
         match self {
-            Game::Lol => "league_of_legends",
+            Game::Lol | Game::Both => "league_of_legends",
             Game::Valorant => "valorant",
             Game::Client => "riot-client",
         }
@@ -62,7 +65,7 @@ impl Game {
     /// The process that shows the game's own client came up.
     pub fn client_process(self) -> Option<&'static str> {
         match self {
-            Game::Lol => Some("LeagueClientUx.exe"),
+            Game::Lol | Game::Both => Some("LeagueClientUx.exe"),
             Game::Valorant => Some("VALORANT-Win64-Shipping.exe"),
             Game::Client => None,
         }
@@ -204,4 +207,16 @@ pub fn league_install_dirs() -> Vec<PathBuf> {
         .unwrap_or_default();
     dirs.push(PathBuf::from(r"C:\Riot Games\League of Legends"));
     dirs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Game;
+
+    #[test]
+    fn both_is_stored_by_name_and_opens_league_by_default() {
+        assert_eq!(serde_json::to_string(&Game::Both).unwrap(), "\"both\"");
+        assert_eq!(serde_json::from_str::<Game>("\"both\"").unwrap(), Game::Both);
+        assert_eq!(Game::Both.launch_args(), Game::Lol.launch_args());
+    }
 }
