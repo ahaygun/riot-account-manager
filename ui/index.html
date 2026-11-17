@@ -11,6 +11,11 @@
   <section id="view-list" class="view">
     <header>
       <input id="filter" type="text" placeholder="Hesap ara, Enter ile aç" autocomplete="off" spellcheck="false">
+      <div id="games" class="seg" role="radiogroup" aria-label="Oyuna göre göster" hidden>
+        <button type="button" role="radio" data-game="all">Tümü</button>
+        <button type="button" role="radio" data-game="lol">League</button>
+        <button type="button" role="radio" data-game="valorant">VALORANT</button>
+      </div>
     </header>
 
     <div id="update" class="banner accent" hidden>

@@ -39,6 +39,8 @@ Oturumu kaydederken Riot Client kapatılır; oturum diske ancak düzgün kapanı
 - Masaüstü kısayolu: hesabın ayarlarında **Masaüstü kısayolu oluştur**.
 - Komut satırı: `quickswitch.exe --switch "Hesap Adı"`.
 
+Listeyi düzenlemek: bir hesabı tutup yukarı ya da aşağı sürükle (klavyede Alt+ok tuşları). Hesapların hem League hem VALORANT'ı kapsıyorsa listenin üstünde **Tümü / League / VALORANT** filtresi çıkar; VALORANT filtresindeyken iki oyunlu bir hesaba tıklamak onu VALORANT ile açar.
+
 Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 
 ## Hesap ayarları (⋯)

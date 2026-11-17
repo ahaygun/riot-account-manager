@@ -251,6 +251,11 @@ fn rename_account(app: AppHandle, id: String, name: String) -> CmdResult<()> {
 }
 
 #[tauri::command(async)]
+fn reorder_accounts(app: AppHandle, ids: Vec<String>) -> CmdResult<()> {
+    edit(&app, |sw| sw.reorder(&ids))
+}
+
+#[tauri::command(async)]
 fn set_game(app: AppHandle, id: String, game: Game) -> CmdResult<()> {
     edit(&app, |sw| sw.set_game(&id, game))
 }
@@ -622,6 +627,7 @@ fn main() {
             add_with_password,
             remove_account,
             rename_account,
+            reorder_accounts,
             set_game,
             set_credentials,
             clear_credentials,

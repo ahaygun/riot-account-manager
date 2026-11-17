@@ -650,3 +650,19 @@ fn another_game_can_be_asked_for_without_changing_the_accounts_own() {
     assert_eq!(f.sw.await_login("ana-hesap", Some(Game::Valorant), &never).unwrap(), LoginOutcome::SignedIn);
     assert_eq!(f.w.sim().started_products.last().unwrap(), "valorant");
 }
+
+#[test]
+fn reordering_accounts() {
+    let f = fixture("order");
+    two_accounts(&f);
+    f.sw.add_with_credentials("Üç", "u", "p", Game::Lol).unwrap();
+    let names = |sw: &Switcher| sw.view().unwrap().accounts.iter().map(|a| a.account.id.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&f.sw), ["ana-hesap", "smurf", "hesap"]);
+    f.sw.reorder(&["hesap".into(), "ana-hesap".into(), "smurf".into()]).unwrap();
+    assert_eq!(names(&f.sw), ["hesap", "ana-hesap", "smurf"]);
+    // A partial or stale list never drops or duplicates accounts.
+    f.sw.reorder(&["smurf".into(), "yok".into()]).unwrap();
+    assert_eq!(names(&f.sw), ["smurf", "hesap", "ana-hesap"]);
+    // The order survives a restart.
+    assert_eq!(names(&switcher(f.sw.env.clone(), &f.w)), ["smurf", "hesap", "ana-hesap"]);
+}

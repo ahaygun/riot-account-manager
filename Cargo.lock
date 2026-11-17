@@ -3185,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "quickswitch"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "quickswitch-core",
  "serde",
@@ -3200,7 +3200,7 @@ dependencies = [
 
 [[package]]
 name = "quickswitch-core"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "argon2",
  "chacha20poly1305",

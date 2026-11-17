@@ -86,6 +86,12 @@ main { flex: 1; overflow-y: auto; padding: 0 14px; }
 main::-webkit-scrollbar { width: 8px; }
 main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 4px; }
 
+/* ---- game filter ---- */
+.seg { display: flex; gap: 2px; margin-top: 8px; padding: 3px; border-radius: 10px; background: var(--slate); }
+.seg button { flex: 1; padding: 6px 8px; border-radius: 8px; background: none; color: var(--mist); font-size: 12px; font-weight: 600; }
+.seg button:hover { color: var(--paper); background: none; }
+.seg button[aria-checked="true"] { background: var(--slate-up); color: var(--paper); box-shadow: inset 0 0 0 1px var(--edge); }
+
 /* ---- account list ---- */
 #accounts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 
@@ -99,6 +105,17 @@ main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 4px; }
   transition: background-color .15s, transform .12s var(--ease);
 }
 .account:hover, .account.selected { background: var(--slate-up); }
+/* Reordering: the held row floats under the pointer, the others make room. */
+#accounts.reordering .account { transition: transform .16s var(--ease); }
+#accounts.reordering .account.dragging {
+  z-index: 2;
+  transition: none;
+  background: var(--slate-up);
+  box-shadow: 0 10px 24px rgba(4, 6, 14, .55), inset 0 0 0 1px var(--brass-deep);
+  cursor: grabbing;
+}
+#accounts.reordering { cursor: grabbing; }
+#accounts.reordering button { pointer-events: none; }
 .account:active { transform: scale(.985); }
 
 /* The bar on the left edge says whose session is open. */

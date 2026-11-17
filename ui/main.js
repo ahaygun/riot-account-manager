@@ -20,6 +20,9 @@ let wizard = null;     // null, or { step, mode } while the wizard is open
 let afterUnlock = null; // id of an account to switch to once the lock opens
 
 let shownIds = null;    // account ids last drawn, to animate the list only when it changes
+let drag = null;       // the row being dragged, while reordering
+let gameFilter = "all"; // "all", "lol" or "valorant"
+try { gameFilter = localStorage.getItem("gameFilter") || "all"; } catch {}
 
 const errorText = (e) => (e && e.message) || String(e);
 const errorKind = (e) => (e && e.kind) || "other";
@@ -69,10 +72,39 @@ async function whileWorking(button, work) {
 
 // ---- account list ---------------------------------------------------------
 
+const plays = (a, game) => game === "all" || a.game === game || a.game === "both";
+
 function visibleAccounts() {
   const q = $("filter").value.trim().toLocaleLowerCase("tr");
-  return view.accounts.filter((a) => `${a.name} ${a.riot_id || ""}`.toLocaleLowerCase("tr").includes(q));
+  return view.accounts.filter(
+    (a) => plays(a, gameFilter) && `${a.name} ${a.riot_id || ""}`.toLocaleLowerCase("tr").includes(q),
+  );
 }
+
+// The game an account opens from its row: with a game filter on, an
+// account that plays both opens the filtered game.
+const rowGame = (a) => (a.game === "both" && gameFilter !== "all" ? gameFilter : null);
+
+// ---- game filter --------------------------------------------------------------
+// Shown only when the accounts span both games, otherwise it filters nothing.
+
+function renderGameFilter() {
+  const useful = view.accounts.some((a) => a.game === "lol" || a.game === "both")
+    && view.accounts.some((a) => a.game === "valorant" || a.game === "both");
+  $("games").hidden = !useful;
+  if (!useful) gameFilter = "all";
+  for (const b of $("games").children) b.setAttribute("aria-checked", String(b.dataset.game === gameFilter));
+}
+
+$("games").addEventListener("click", (e) => {
+  const game = e.target.dataset && e.target.dataset.game;
+  if (!game) return;
+  gameFilter = game;
+  try { localStorage.setItem("gameFilter", game); } catch {}
+  selected = 0;
+  render();
+  $("filter").focus();
+});
 
 // `action` is an optional { label, run } shown as a button beside the text.
 function say(text, isError = false, action = null) {
@@ -92,18 +124,21 @@ function hotkeyLabel(hotkey) {
 }
 
 function render() {
+  renderGameFilter();
   const accounts = visibleAccounts();
   selected = Math.min(selected, Math.max(accounts.length - 1, 0));
   const rows = accounts.map((a, i) => row(a, i));
   if (!rows.length) {
     const empty = document.createElement("li");
     empty.className = "empty";
-    empty.textContent = view.accounts.length ? "Eşleşen hesap yok." : "Henüz hesap yok. \"Hesap ekle\" ile başla.";
+    empty.textContent = !view.accounts.length ? "Henüz hesap yok. \"Hesap ekle\" ile başla."
+      : $("filter").value.trim() ? "Eşleşen hesap yok."
+      : `Bu listede ${gameFilter === "lol" ? "League" : "VALORANT"} oynayan hesap yok.`;
     rows.push(empty);
   }
   // Rows animate in only when the set of accounts changes, not on the
   // periodic refresh.
-  const ids = view.accounts.map((a) => a.id).join("|");
+  const ids = view.accounts.map((a) => a.id).sort().join("|");
   $("accounts").classList.toggle("arriving", ids !== shownIds);
   shownIds = ids;
   $("accounts").replaceChildren(...rows);
@@ -124,7 +159,9 @@ function render() {
 function row(a, i) {
   const li = document.createElement("li");
   li.className = "account";
+  li.dataset.id = a.id;
   li.style.setProperty("--i", i);
+  li.addEventListener("pointerdown", (e) => startDrag(e, li));
   li.classList.toggle("active", a.id === view.active);
   li.classList.toggle("selected", i === selected);
   li.classList.toggle("busy", a.id === busy);
@@ -133,7 +170,7 @@ function row(a, i) {
   go.type = "button";
   go.className = "go";
   go.disabled = busy !== null;
-  go.addEventListener("click", () => switchTo(a));
+  go.addEventListener("click", () => switchTo(a, rowGame(a)));
 
   const name = document.createElement("span");
   name.className = "name";
@@ -191,6 +228,7 @@ function tag(text, warn = false) {
 }
 
 async function refresh() {
+  if (drag) return; // redrawing would drop the row out of the user's hand
   try {
     view = await invoke("get_state");
   } catch (e) {
@@ -240,6 +278,101 @@ function reportSwitchError(e, id) {
   });
 }
 
+// ---- reordering by drag ---------------------------------------------------------
+// Press on a row and move: past a few pixels it becomes a drag (and the
+// press no longer counts as a click). Done with pointer events, because
+// the app window reserves the browser's own drag-and-drop for files.
+
+const DRAG_START = 6; // px of movement before a press becomes a drag
+
+function startDrag(e, li) {
+  if (e.button !== 0 || busy) return;
+  const rows = [...$("accounts").querySelectorAll(".account")];
+  if (rows.length < 2) return;
+  const from = rows.indexOf(li);
+  drag = { li, rows, from, to: from, startY: e.clientY, active: false, step: 0 };
+}
+
+window.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const dy = e.clientY - drag.startY;
+  if (!drag.active) {
+    if (Math.abs(dy) < DRAG_START) return;
+    drag.active = true;
+    const r = drag.rows;
+    // Distance between two rows, gap included.
+    drag.step = r.length > 1 ? Math.abs(r[1].getBoundingClientRect().top - r[0].getBoundingClientRect().top) : drag.li.offsetHeight;
+    $("accounts").classList.add("reordering");
+    drag.li.classList.add("dragging");
+  }
+  const n = drag.rows.length;
+  const min = -drag.from * drag.step - drag.step / 2;
+  const max = (n - 1 - drag.from) * drag.step + drag.step / 2;
+  const y = Math.max(min, Math.min(max, dy));
+  drag.li.style.transform = `translateY(${y}px)`;
+  drag.to = Math.max(0, Math.min(n - 1, drag.from + Math.round(y / drag.step)));
+  drag.rows.forEach((row, i) => {
+    if (row === drag.li) return;
+    let shift = 0;
+    if (drag.from < drag.to && i > drag.from && i <= drag.to) shift = -drag.step;
+    if (drag.from > drag.to && i >= drag.to && i < drag.from) shift = drag.step;
+    row.style.transform = shift ? `translateY(${shift}px)` : "";
+  });
+});
+
+function endDrag() {
+  if (!drag) return;
+  const { active, rows, from, to } = drag;
+  drag = null;
+  for (const row of rows) row.style.transform = "";
+  $("accounts").classList.remove("reordering");
+  rows[from].classList.remove("dragging");
+  if (!active) return;
+  // The release would otherwise count as a click on the row.
+  // The browser sends that click right after this event; if the pointer
+  // was released elsewhere none comes, so the guard is dropped a tick later.
+  const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+  window.addEventListener("click", swallow, { capture: true, once: true });
+  setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+  if (to === from) return;
+  const ids = rows.map((r) => r.dataset.id);
+  ids.splice(to, 0, ids.splice(from, 1)[0]);
+  selected = to;
+  saveVisibleOrder(ids);
+}
+
+window.addEventListener("pointerup", endDrag);
+window.addEventListener("pointercancel", endDrag);
+window.addEventListener("blur", endDrag);
+
+// `ids` is the new order of the rows on screen, which may be a filtered
+// subset: they keep the places their accounts held in the full list.
+async function saveVisibleOrder(ids) {
+  const shown = new Set(ids);
+  const slots = view.accounts.map((a, i) => (shown.has(a.id) ? i : -1)).filter((i) => i >= 0);
+  const next = view.accounts.slice();
+  slots.forEach((slot, k) => { next[slot] = view.accounts.find((a) => a.id === ids[k]); });
+  view.accounts = next;
+  render();
+  try {
+    await invoke("reorder_accounts", { ids: next.map((a) => a.id) });
+  } catch (err) {
+    say(errorText(err), true);
+  }
+  refresh();
+}
+
+// Alt+arrows move the selected account, as dragging does.
+function moveSelected(e, accounts) {
+  e.preventDefault();
+  const to = selected + (e.key === "ArrowUp" ? -1 : 1);
+  if (to < 0 || to >= accounts.length) return;
+  const ids = accounts.map((a) => a.id);
+  ids.splice(to, 0, ids.splice(selected, 1)[0]);
+  selected = to;
+  saveVisibleOrder(ids);
+}
+
 $("filter").addEventListener("input", () => {
   selected = 0;
   render();
@@ -248,13 +381,15 @@ $("filter").addEventListener("input", () => {
 document.addEventListener("keydown", (e) => {
   if ($("view-list").hidden || e.target !== $("filter")) return;
   const accounts = visibleAccounts();
+  if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) return void moveSelected(e, accounts);
   if (e.key === "ArrowDown") selected = Math.min(selected + 1, accounts.length - 1);
   else if (e.key === "ArrowUp") selected = Math.max(selected - 1, 0);
   else if (e.key === "Enter" && accounts[selected]) {
     // For an account that plays both, Shift+Enter opens VALORANT.
     const a = accounts[selected];
-    return void switchTo(a, e.shiftKey && a.game === "both" ? "valorant" : null);
+    return void switchTo(a, e.shiftKey && a.game === "both" ? "valorant" : rowGame(a));
   }
+
   else return;
   e.preventDefault();
   render();

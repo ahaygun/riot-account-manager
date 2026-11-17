@@ -795,6 +795,17 @@ impl Switcher {
         })
     }
 
+    /// Puts the accounts in the order of `ids`. Accounts missing from
+    /// `ids` keep their relative order after the listed ones; unknown ids
+    /// are ignored, so a stale list from the window cannot lose accounts.
+    pub fn reorder(&self, ids: &[String]) -> Result<()> {
+        self.update(|state| {
+            let rank = |id: &str| ids.iter().position(|x| x == id).unwrap_or(usize::MAX);
+            // A stable sort keeps unlisted accounts in their current order.
+            state.accounts.sort_by_key(|a| rank(&a.id));
+        })
+    }
+
     pub fn set_game(&self, id: &str, game: Game) -> Result<()> {
         self.update_account(id, |acc, _| {
             acc.game = game;
