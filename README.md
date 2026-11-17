@@ -19,7 +19,7 @@ Windows 10 ve 11'de çalışır. Kaldırmak için Windows'un **Uygulamalar** aya
 
 Testler: `cargo test --workspace`
 
-Yeni sürüm yayınlamak: sürüm numarasını `src-tauri/tauri.conf.json` içinde artır, sonra `git tag v0.3.1 && git push origin v0.3.1`. GitHub kurulum dosyasını kendisi derleyip Releases'e ekler.
+Yeni sürüm yayınlamak: sürüm numarasını `src-tauri/tauri.conf.json` içinde artırıp `main` dalına gönder. GitHub kurulum dosyasını kendisi derleyip Releases'e ekler.
 
 ## Hesap ekleme
 
