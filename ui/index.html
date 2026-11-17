@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QuickSwitch</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Main view: the account list -->
+  <section id="view-list" class="view">
+    <header>
+      <input id="filter" type="text" placeholder="Hesap ara, Enter ile geç" autocomplete="off" spellcheck="false">
+    </header>
+
+    <div id="locked" class="banner accent" hidden>
+      <p>Kilitli. Hesap değiştirmek için kilidi aç.</p>
+      <button id="locked-open" type="button" class="primary">Kilidi aç</button>
+    </div>
+
+    <div id="queue" class="banner" hidden>
+      <p id="queue-text"></p>
+      <button id="queue-cancel" type="button">İptal</button>
+    </div>
+
+    <div id="unsaved" class="banner accent" hidden>
+      <p>Riot Client'taki oturum henüz kayıtlı değil.</p>
+      <button id="unsaved-save" type="button" class="primary">Kaydet</button>
+    </div>
+
+    <main>
+      <ul id="accounts" aria-label="Hesaplar"></ul>
+    </main>
+
+    <div id="message" role="status" hidden>
+      <p id="message-text"></p>
+      <button id="message-action" type="button" hidden></button>
+    </div>
+
+    <footer>
+      <button id="add" type="button" class="primary">Hesap ekle</button>
+      <button id="security" type="button" class="link">
+        <svg class="lock-mark" id="footer-lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path class="shackle" d="M5 7V5a3 3 0 0 1 6 0v2"/><rect x="3" y="7" width="10" height="7" rx="2" fill="currentColor" stroke="none"/></svg>
+        Güvenlik
+      </button>
+      <span class="spacer"></span>
+      <label class="check"><input id="autostart" type="checkbox" title="Windows açılınca tepside gizli başlar"> Açılışta başlat</label>
+    </footer>
+  </section>
+
+  <!-- One account's settings -->
+  <section id="view-edit" class="view" hidden>
+    <header class="titlebar">
+      <button id="edit-back" type="button" class="link">‹ Geri</button>
+      <h1 id="edit-title"></h1>
+    </header>
+    <main class="form">
+      <label>Ad
+        <input id="edit-name" type="text" maxlength="40" autocomplete="off" spellcheck="false">
+      </label>
+      <label>Açılacak oyun
+        <select id="edit-game">
+          <option value="lol">League of Legends / TFT</option>
+          <option value="valorant">VALORANT</option>
+          <option value="client">Yalnızca Riot Client</option>
+        </select>
+      </label>
+      <label>Kısayol tuşu
+        <span class="row">
+          <input id="edit-hotkey" type="text" readonly placeholder="Tıkla ve tuşlara bas (ör. Ctrl+Alt+1)">
+          <button id="edit-hotkey-clear" type="button">Kaldır</button>
+        </span>
+      </label>
+
+      <fieldset>
+        <legend>Otomatik giriş (isteğe bağlı)</legend>
+        <p class="hint" id="edit-cred-state"></p>
+        <input id="edit-username" type="text" placeholder="Riot kullanıcı adı" autocomplete="off" spellcheck="false">
+        <input id="edit-password" type="password" placeholder="Şifre" autocomplete="new-password">
+        <span class="row">
+          <button id="edit-cred-save" type="button">Şifreyi kaydet</button>
+          <button id="edit-cred-clear" type="button">Kayıtlı şifreyi sil</button>
+        </span>
+      </fieldset>
+
+      <button id="edit-shortcut" type="button">Masaüstü kısayolu oluştur</button>
+      <button id="edit-remove" type="button" class="danger">Hesabı sil</button>
+      <p id="edit-message" class="hint" role="status"></p>
+    </main>
+  </section>
+
+  <!-- Add-account wizard -->
+  <section id="view-wizard" class="view" hidden>
+    <header class="titlebar">
+      <button id="wiz-close" type="button" class="link">‹ Vazgeç</button>
+      <h1>Hesap ekle</h1>
+    </header>
+    <main class="form">
+      <div id="wiz-choose" class="step">
+        <p id="wiz-intro"></p>
+        <p class="hint">Eklediğin her şey bu bilgisayarda şifreli saklanır ve internete gönderilmez.</p>
+        <button id="wiz-session" type="button" class="choice">
+          <b>Giriş yaparak ekle</b>
+          <span>Riot Client'ta bir kez giriş yaparsın, oturum saklanır. Şifre saklanmaz. Önerilen yol.</span>
+        </button>
+        <button id="wiz-password" type="button" class="choice">
+          <b>Şifreyle ekle</b>
+          <span>Kullanıcı adı ve şifre şifreli saklanır, her geçişte otomatik yazılır. Biraz daha yavaş.</span>
+        </button>
+      </div>
+
+      <div id="wiz-wait" class="step" hidden>
+        <p><b>Riot Client açıldı.</b></p>
+        <ol>
+          <li><b>Oturumu açık tut</b> kutusunu işaretle.</li>
+          <li>Eklemek istediğin hesapla giriş yap.</li>
+        </ol>
+        <p id="wiz-wait-status" class="hint">Giriş bekleniyor…</p>
+      </div>
+
+      <div id="wiz-name" class="step" hidden>
+        <p id="wiz-found"></p>
+        <label>Hesaba bir ad ver
+          <input id="wiz-name-input" type="text" maxlength="40" autocomplete="off" spellcheck="false">
+        </label>
+        <label>Açılacak oyun
+          <select id="wiz-game">
+            <option value="lol">League of Legends / TFT</option>
+            <option value="valorant">VALORANT</option>
+            <option value="client">Yalnızca Riot Client</option>
+          </select>
+        </label>
+        <fieldset id="wiz-creds">
+          <legend id="wiz-creds-legend"></legend>
+          <input id="wiz-username" type="text" placeholder="Riot kullanıcı adı" autocomplete="off" spellcheck="false">
+          <input id="wiz-pass" type="password" placeholder="Şifre" autocomplete="new-password">
+        </fieldset>
+        <button id="wiz-save" type="button" class="primary">Kaydet</button>
+      </div>
+
+      <div id="wiz-done" class="step" hidden>
+        <p id="wiz-done-text"></p>
+        <button id="wiz-another" type="button">Başka hesap ekle</button>
+        <button id="wiz-finish" type="button" class="primary">Bitti</button>
+      </div>
+
+      <p id="wiz-message" class="hint error" role="status"></p>
+    </main>
+  </section>
+
+  <!-- Unlock prompt -->
+  <section id="view-unlock" class="view" hidden>
+    <header class="titlebar">
+      <button id="unlock-back" type="button" class="link">‹ Geri</button>
+      <h1>Kilidi aç</h1>
+    </header>
+    <main class="form">
+      <p class="hint">Kayıtlı oturumlar ve şifreler ana şifrenle kilitli. Ana şifre hiçbir yere kaydedilmez.</p>
+      <form id="unlock-form" class="step">
+        <input id="unlock-password" type="password" placeholder="Ana şifre" autocomplete="off">
+        <button type="submit" class="primary">Kilidi aç</button>
+      </form>
+      <p id="unlock-message" class="hint error" role="status"></p>
+      <p class="hint">Ana şifreni unuttuysan kurtarmanın yolu yok: Güvenlik ekranından tüm verileri silip hesapları yeniden ekleyebilirsin.</p>
+    </main>
+  </section>
+
+  <!-- Security: what is stored, how, and the controls over it -->
+  <section id="view-security" class="view" hidden>
+    <header class="titlebar">
+      <button id="sec-back" type="button" class="link">‹ Geri</button>
+      <h1>Güvenlik</h1>
+    </header>
+    <main class="form">
+      <div class="card">
+        <h2>Verilerin bu bilgisayarda kalır</h2>
+        <ul>
+          <li>Uygulama internete bağlanmaz. Yalnızca bu bilgisayardaki Riot Client ile konuşur.</li>
+          <li>Kayıtlı oturumlar, şifreler ve hesap listesi Windows hesabına bağlı şifrelenir. Başka bir kullanıcı ya da başka bir bilgisayar bu dosyaları açamaz.</li>
+          <li>Kaydettiğin şifre bir daha ekranda gösterilmez; yalnızca Riot Client'ın giriş penceresine yazılır.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Bu bilgisayarda saklananlar</h2>
+        <p id="sec-counts"></p>
+        <p id="sec-path" class="hint path"></p>
+        <button id="sec-open" type="button">Klasörü göster</button>
+      </div>
+
+      <div class="card">
+        <h2>Uygulama kilidi</h2>
+        <p id="sec-lock-state" class="hint"></p>
+        <div id="sec-lock-off" class="step">
+          <input id="sec-new" type="password" placeholder="Ana şifre (en az 8 karakter)" autocomplete="new-password">
+          <input id="sec-new2" type="password" placeholder="Ana şifre, tekrar" autocomplete="new-password">
+          <button id="sec-enable" type="button">Kilidi etkinleştir</button>
+        </div>
+        <div id="sec-lock-on" class="step" hidden>
+          <button id="sec-lock-now" type="button">Şimdi kilitle</button>
+          <span class="row">
+            <input id="sec-current" type="password" placeholder="Mevcut ana şifre" autocomplete="off">
+            <button id="sec-disable" type="button">Kilidi kaldır</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Bilmen gerekenler</h2>
+        <ul>
+          <li>Kayıtlı bir oturum, şifre girmeden o hesaba giriş demektir. Bu bilgisayarı ve Windows hesabını kullanan herkes hesaplarına geçebilir; paylaşılan bilgisayarda uygulama kilidini aç.</li>
+          <li>Bilgisayarında senin adına çalışan kötü amaçlı bir yazılımı hiçbir uygulama tam olarak durduramaz. Uygulama kilidi, o an açık olmayan hesaplarını ona karşı da kapalı tutar.</li>
+        </ul>
+      </div>
+
+      <button id="sec-wipe" type="button" class="danger">Tüm verileri sil</button>
+      <p class="hint">Hesap listesini, kayıtlı oturumları, şifreleri ve kilidi siler. Riot Client'a ve Riot hesaplarına dokunmaz.</p>
+      <p id="sec-message" class="hint" role="status"></p>
+    </main>
+  </section>
+
+  <!-- The seal: a padlock that closes while something is encrypted -->
+  <div id="seal" hidden role="status" aria-live="polite">
+    <svg class="padlock" viewBox="0 0 72 72" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle class="ring" cx="36" cy="40" r="30" stroke-width="2"/>
+      <path class="shackle" d="M24 34V24a12 12 0 0 1 24 0v10" stroke-width="5"/>
+      <rect class="body" x="16" y="32" width="40" height="30" rx="8" fill="currentColor" stroke="none"/>
+      <g class="keyhole" fill="#141829" stroke="none"><circle cx="36" cy="44" r="4"/><rect x="34.2" y="45" width="3.6" height="8" rx="1.8"/></g>
+      <path class="tick" d="M29 47l5 5 9-10" stroke="#141829" stroke-width="3.5"/>
+    </svg>
+    <p id="seal-text"></p>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

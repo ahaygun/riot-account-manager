@@ -1,0 +1,262 @@
+//! The local HTTP interfaces Riot Client and the League client expose on
+//! 127.0.0.1 while they run. Each writes a `lockfile` with the port and a
+//! one-time password; the certificate is self-signed.
+//!
+//! Behind a trait so the switching logic can be tested without a client.
+
+use crate::store;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginState {
+    /// Riot Client is not running or not answering yet.
+    Unknown,
+    SignedOut,
+    SignedIn {
+        /// The "stay signed in" box, when the client says.
+        persist: Option<bool>,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Identity {
+    pub puuid: Option<String>,
+    /// `Name#TAG`
+    pub riot_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LeagueInfo {
+    pub puuid: Option<String>,
+    pub riot_id: Option<String>,
+    pub level: Option<u64>,
+    /// Solo queue, e.g. "Gold II 45 LP"; `None` when unranked.
+    pub rank: Option<String>,
+}
+
+pub trait ClientApi: Send + Sync {
+    fn login(&self) -> LoginState;
+    /// Who is signed in to Riot Client.
+    fn identity(&self) -> Option<Identity>;
+    /// Asks Riot Client to quit properly, which is when it writes its
+    /// session to disk. Returns false if it could not be asked.
+    fn quit(&self) -> bool;
+    /// Starts a game the way the client's Play button does.
+    fn start_product(&self, product: &str) -> bool;
+    /// Summoner details from the League client, if it is running.
+    fn league(&self) -> Option<LeagueInfo>;
+}
+
+/// Real implementation.
+pub struct LocalApi {
+    riot_games_dir: PathBuf,
+}
+
+struct Access {
+    port: u16,
+    password: String,
+    scheme: &'static str,
+}
+
+fn http() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            // Only ever used against 127.0.0.1, where the client presents a
+            // self-signed certificate.
+            .danger_accept_invalid_certs(true)
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(4))
+            .build()
+            .expect("local HTTP client")
+    })
+}
+
+/// `name:pid:port:password:protocol`
+fn parse_lockfile(text: &str) -> Option<Access> {
+    let parts: Vec<&str> = text.trim().split(':').collect();
+    if parts.len() != 5 {
+        return None;
+    }
+    let port: u16 = parts[2].parse().ok().filter(|p| *p >= 1024)?;
+    let password = parts[3].trim();
+    let scheme = match parts[4].trim() {
+        "https" => "https",
+        "http" => "http",
+        _ => return None,
+    };
+    (!password.is_empty()).then(|| Access { port, password: password.to_string(), scheme })
+}
+
+fn read_lockfile(path: &Path) -> Option<Access> {
+    parse_lockfile(&std::fs::read_to_string(path).ok()?)
+}
+
+/// `Ok(Some(json))` on 2xx, `Ok(None)` on any other answer, `Err` when the
+/// client could not be reached at all.
+fn request(access: &Access, method: reqwest::Method, path: &str) -> Result<Option<Value>, ()> {
+    let url = format!("{}://127.0.0.1:{}{}", access.scheme, access.port, path);
+    let resp = http().request(method, url).basic_auth("riot", Some(&access.password)).send().map_err(|_| ())?;
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    Ok(Some(resp.json::<Value>().unwrap_or(Value::Null)))
+}
+
+fn get(access: &Access, path: &str) -> Result<Option<Value>, ()> {
+    request(access, reqwest::Method::GET, path)
+}
+
+fn text(v: &Value, key: &str) -> Option<String> {
+    v.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+}
+
+fn riot_id(name: Option<String>, tag: Option<String>) -> Option<String> {
+    match (name, tag) {
+        (Some(n), Some(t)) => Some(format!("{n}#{t}")),
+        (Some(n), None) => Some(n),
+        _ => None,
+    }
+}
+
+pub(crate) fn login_from(rso_session: Option<&Value>, legacy_status: Option<&Value>) -> LoginState {
+    let legacy_persist = legacy_status.and_then(|v| v.get("persist")).and_then(Value::as_bool);
+    if let Some(kind) = rso_session.and_then(|v| v.get("type")).and_then(Value::as_str) {
+        if !kind.eq_ignore_ascii_case("authenticated") {
+            return LoginState::SignedOut;
+        }
+        let persist = rso_session.and_then(|v| v.get("persistLogin")).and_then(Value::as_bool).or(legacy_persist);
+        return LoginState::SignedIn { persist };
+    }
+    let phase = legacy_status.and_then(|v| v.get("phase")).and_then(Value::as_str).unwrap_or_default();
+    if phase.eq_ignore_ascii_case("logged_in") {
+        LoginState::SignedIn { persist: legacy_persist }
+    } else {
+        LoginState::SignedOut
+    }
+}
+
+pub(crate) fn rank_from(stats: &Value) -> Option<String> {
+    let solo = stats.get("queueMap")?.get("RANKED_SOLO_5x5")?;
+    let tier = solo.get("tier").and_then(Value::as_str).unwrap_or_default();
+    if tier.is_empty() || tier.eq_ignore_ascii_case("NONE") || tier.eq_ignore_ascii_case("UNRANKED") {
+        return None;
+    }
+    let mut tier_name = tier.to_lowercase();
+    if let Some(first) = tier_name.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    let division = solo.get("division").and_then(Value::as_str).filter(|d| !d.is_empty() && *d != "NA");
+    let lp = solo.get("leaguePoints").and_then(Value::as_u64).unwrap_or(0);
+    Some(match division {
+        Some(d) => format!("{tier_name} {d} {lp} LP"),
+        None => format!("{tier_name} {lp} LP"),
+    })
+}
+
+impl LocalApi {
+    pub fn new(riot_games_dir: PathBuf) -> Self {
+        LocalApi { riot_games_dir }
+    }
+
+    fn riot(&self) -> Option<Access> {
+        read_lockfile(&self.riot_games_dir.join("Riot Client").join("Config").join("lockfile"))
+    }
+
+    fn league_access(&self) -> Option<Access> {
+        store::league_install_dirs().iter().find_map(|d| read_lockfile(&d.join("lockfile")))
+    }
+}
+
+impl ClientApi for LocalApi {
+    fn login(&self) -> LoginState {
+        let Some(access) = self.riot() else { return LoginState::Unknown };
+        // The session route answers 404 while the client is still starting
+        // and does not exist on old clients; the status route covers both.
+        let Ok(rso) = get(&access, "/rso-auth/v1/session") else { return LoginState::Unknown };
+        let legacy = get(&access, "/riot-login/v1/status").ok().flatten();
+        login_from(rso.as_ref(), legacy.as_ref())
+    }
+
+    fn identity(&self) -> Option<Identity> {
+        let access = self.riot()?;
+        let userinfo = get(&access, "/riot-client-auth/v1/userinfo").ok().flatten().unwrap_or(Value::Null);
+        // Some client versions wrap the claims in a JSON string.
+        let claims = match userinfo.get("userInfo").and_then(Value::as_str) {
+            Some(inner) => serde_json::from_str(inner).unwrap_or(Value::Null),
+            None => userinfo,
+        };
+        let alias = get(&access, "/player-account/aliases/v1/active").ok().flatten().unwrap_or(Value::Null);
+        let id = Identity {
+            puuid: text(&claims, "sub"),
+            riot_id: riot_id(text(&alias, "game_name"), text(&alias, "tag_line")),
+        };
+        (id != Identity::default()).then_some(id)
+    }
+
+    fn quit(&self) -> bool {
+        let Some(access) = self.riot() else { return false };
+        request(&access, reqwest::Method::POST, "/process-control/v1/process/quit").is_ok()
+    }
+
+    fn start_product(&self, product: &str) -> bool {
+        let Some(access) = self.riot() else { return false };
+        let path = format!("/product-launcher/v1/products/{product}/patchlines/live");
+        matches!(request(&access, reqwest::Method::POST, &path), Ok(Some(_)))
+    }
+
+    fn league(&self) -> Option<LeagueInfo> {
+        let access = self.league_access()?;
+        let me = get(&access, "/lol-summoner/v1/current-summoner").ok().flatten()?;
+        let stats = get(&access, "/lol-ranked/v1/current-ranked-stats").ok().flatten().unwrap_or(Value::Null);
+        Some(LeagueInfo {
+            puuid: text(&me, "puuid"),
+            riot_id: riot_id(text(&me, "gameName"), text(&me, "tagLine")),
+            level: me.get("summonerLevel").and_then(Value::as_u64),
+            rank: rank_from(&stats),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn lockfile() {
+        let a = parse_lockfile("Riot Client:1234:51234:s3cret:https\n").unwrap();
+        assert_eq!((a.port, a.password.as_str(), a.scheme), (51234, "s3cret", "https"));
+        assert!(parse_lockfile("garbage").is_none());
+        assert!(parse_lockfile("a:1:80:pw:https").is_none());
+        assert!(parse_lockfile("a:1:5000:pw:ftp").is_none());
+    }
+
+    #[test]
+    fn login_states() {
+        let authed = json!({"type": "authenticated", "persistLogin": true});
+        assert_eq!(login_from(Some(&authed), None), LoginState::SignedIn { persist: Some(true) });
+        let needs = json!({"type": "needs_authentication"});
+        assert_eq!(login_from(Some(&needs), None), LoginState::SignedOut);
+        // Old client: no session route, status route says logged in.
+        let legacy = json!({"phase": "logged_in", "persist": false});
+        assert_eq!(login_from(None, Some(&legacy)), LoginState::SignedIn { persist: Some(false) });
+        // Still starting: neither route has an answer.
+        assert_eq!(login_from(None, None), LoginState::SignedOut);
+    }
+
+    #[test]
+    fn ranks() {
+        let s = json!({"queueMap": {"RANKED_SOLO_5x5": {"tier": "GOLD", "division": "II", "leaguePoints": 45}}});
+        assert_eq!(rank_from(&s).as_deref(), Some("Gold II 45 LP"));
+        let m = json!({"queueMap": {"RANKED_SOLO_5x5": {"tier": "MASTER", "division": "NA", "leaguePoints": 312}}});
+        assert_eq!(rank_from(&m).as_deref(), Some("Master 312 LP"));
+        let u = json!({"queueMap": {"RANKED_SOLO_5x5": {"tier": "", "division": "NA", "leaguePoints": 0}}});
+        assert_eq!(rank_from(&u), None);
+        assert_eq!(rank_from(&json!({})), None);
+    }
+}

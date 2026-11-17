@@ -1,0 +1,276 @@
+/* Palette: a brass key on indigo night. Brass marks what is locked and
+   what you act on; mint marks who is signed in. System fonts only: the app
+   never fetches anything, fonts included. Motion uses transform and
+   opacity only, so it costs nothing while idle. */
+:root {
+  --ink: #141829;        /* window */
+  --slate: #1d2238;      /* rows, fields */
+  --slate-up: #262c47;   /* hover, raised */
+  --edge: #323a5c;       /* hairlines */
+  --paper: #f1f3fb;      /* text */
+  --mist: #9aa3c4;       /* secondary text */
+  --brass: #e3b25c;      /* lock, primary action */
+  --brass-deep: #b98a3a;
+  --mint: #5fd4a8;       /* signed in */
+  --rose: #f0718a;       /* needs attention, destructive */
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --click: cubic-bezier(.3, 1.6, .5, 1); /* slight overshoot, like a latch */
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* Each view slides in a few pixels when it opens. */
+.view { height: 100%; display: flex; flex-direction: column; animation: view-in .18s var(--ease); }
+@keyframes view-in { from { opacity: 0; transform: translateY(6px); } }
+
+header { padding: 14px 14px 10px; }
+.titlebar { display: flex; align-items: center; gap: 6px; }
+.titlebar h1 {
+  margin: 0;
+  font: 600 17px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+input[type="text"], input[type="password"], select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--slate);
+  color: var(--paper);
+  font: inherit;
+  outline: none;
+  transition: border-color .15s, background-color .15s;
+}
+input:hover, select:hover { background: var(--slate-up); }
+input:focus, select:focus { border-color: var(--brass); background: var(--slate); }
+input::placeholder { color: var(--mist); }
+#filter { padding: 12px 14px; font-size: 15px; }
+
+button {
+  padding: 9px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--slate);
+  color: var(--paper);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .15s, transform .12s var(--ease), opacity .15s;
+}
+button:hover { background: var(--slate-up); }
+button:active { transform: scale(.97); }
+button:disabled { opacity: .45; cursor: default; transform: none; }
+button:focus-visible, input[type="checkbox"]:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+button.primary { background: var(--brass); color: #2a1e06; font-weight: 600; }
+button.primary:hover { background: #edc276; }
+button.danger { color: var(--rose); }
+button.link { background: none; color: var(--mist); padding: 4px 6px; }
+button.link:hover { color: var(--paper); background: none; }
+
+main { flex: 1; overflow-y: auto; padding: 0 14px; }
+main::-webkit-scrollbar { width: 8px; }
+main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 4px; }
+
+/* ---- account list ---- */
+#accounts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+
+.account {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border-radius: 12px;
+  background: var(--slate);
+  overflow: hidden;
+  transition: background-color .15s, transform .12s var(--ease);
+}
+.account:hover, .account.selected { background: var(--slate-up); }
+.account:active { transform: scale(.985); }
+
+/* The bar on the left edge says whose session is open. */
+.account::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 10px; bottom: 10px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--mint);
+  transform: scaleY(0);
+  transition: transform .25s var(--click);
+}
+.account.active::before { transform: scaleY(1); }
+.account.selected { box-shadow: inset 0 0 0 1px var(--edge); }
+
+/* Rows arrive one after another, once, when the list first appears. */
+#accounts.arriving .account { animation: row-in .28s var(--ease) backwards; animation-delay: calc(var(--i) * 35ms); }
+@keyframes row-in { from { opacity: 0; transform: translateY(8px); } }
+
+.account .go {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 11px 6px 11px 16px;
+  border-radius: 0;
+  background: none;
+  text-align: left;
+}
+.account .go:active { transform: none; }
+.account .name { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; min-width: 0; }
+.account .name > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.account .detail { display: flex; gap: 10px; color: var(--mist); font-size: 12px; overflow: hidden; }
+.account .detail span { flex: none; }
+.account .detail .on { color: var(--mint); }
+.account .detail .rank { color: var(--brass); }
+
+.tag { flex: none; padding: 1px 7px; border-radius: 6px; background: var(--ink); color: var(--mist); font-size: 11px; font-weight: 400; }
+.tag.warn { background: none; box-shadow: inset 0 0 0 1px var(--rose); color: var(--rose); }
+
+.account .more { background: none; color: var(--mist); padding: 0 14px; font-size: 18px; border-radius: 0; }
+.account .more:hover { color: var(--paper); background: none; }
+
+/* While an account is being opened, a light band travels along its row. */
+.account.busy::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--brass), transparent);
+  animation: travel 1s linear infinite;
+}
+@keyframes travel { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+.empty { color: var(--mist); padding: 28px 8px; text-align: center; }
+
+/* ---- banners and messages ---- */
+.banner, #message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 14px 8px;
+  padding: 9px 9px 9px 12px;
+  border-radius: 12px;
+  background: var(--slate);
+  animation: drop-in .2s var(--ease);
+}
+@keyframes drop-in { from { opacity: 0; transform: translateY(-6px); } }
+.banner.accent { box-shadow: inset 0 0 0 1px var(--brass-deep); }
+.banner p, #message p { margin: 0; flex: 1; }
+#message { margin-top: 8px; margin-bottom: 0; color: var(--mist); }
+#message.error { color: var(--rose); }
+
+footer { display: flex; align-items: center; gap: 10px; padding: 10px 14px 14px; }
+footer .spacer { flex: 1; }
+
+/* Checkbox drawn as a switch. */
+.check { display: flex; align-items: center; gap: 8px; color: var(--mist); font-size: 12px; cursor: pointer; white-space: nowrap; }
+#security { display: inline-flex; align-items: center; gap: 6px; }
+.check input {
+  appearance: none;
+  width: 30px; height: 18px;
+  margin: 0;
+  border-radius: 9px;
+  background: var(--edge);
+  position: relative;
+  cursor: pointer;
+  transition: background-color .2s;
+}
+.check input::after {
+  content: "";
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--paper);
+  transition: transform .2s var(--click);
+}
+.check input:checked { background: var(--mint); }
+.check input:checked::after { transform: translateX(12px); }
+
+/* ---- forms (settings, wizard, security) ---- */
+.form { display: flex; flex-direction: column; gap: 12px; padding-bottom: 14px; }
+.form label { display: grid; gap: 5px; color: var(--mist); font-size: 12px; }
+.form .row { display: flex; gap: 6px; }
+.form .row input { flex: 1; }
+fieldset { margin: 0; padding: 12px; border: 1px solid var(--edge); border-radius: 12px; display: grid; gap: 8px; }
+legend { color: var(--mist); font-size: 12px; padding: 0 6px; }
+.hint { margin: 0; color: var(--mist); font-size: 12px; }
+.hint.error { color: var(--rose); }
+.hint:empty { display: none; }
+
+.step { display: flex; flex-direction: column; gap: 12px; animation: view-in .18s var(--ease); }
+.step p, .step ol { margin: 0; }
+.step ol { padding-left: 20px; display: grid; gap: 4px; }
+.choice { display: grid; gap: 4px; padding: 14px; text-align: left; white-space: normal; border-radius: 12px; }
+.choice b { font-size: 15px; }
+.choice span { color: var(--mist); font-size: 12px; }
+
+.card { display: grid; gap: 8px; padding: 14px; border-radius: 12px; background: var(--slate); }
+.card h2 { margin: 0; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.card p { margin: 0; }
+.card ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--mist); font-size: 12px; }
+.card button, .card input { background: var(--ink); }
+.card button:hover { background: var(--slate-up); }
+.path { user-select: text; word-break: break-all; }
+
+/* Small padlock beside headings and counts: closed when the lock is on. */
+.lock-mark { width: 16px; height: 16px; color: var(--mist); flex: none; }
+.lock-mark .shackle { transition: transform .3s var(--click); transform: translateY(-2.5px); }
+.lock-mark.closed { color: var(--brass); }
+.lock-mark.closed .shackle { transform: none; }
+
+/* ---- the seal: shown while something is being encrypted or unlocked ---- */
+#seal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  background: rgba(20, 24, 41, .94);
+  z-index: 10;
+  animation: seal-in .15s ease-out;
+}
+#seal.leaving { opacity: 0; transition: opacity .2s ease-in; }
+@keyframes seal-in { from { opacity: 0; } }
+#seal p { margin: 0; color: var(--mist); font-size: 13px; }
+
+.padlock { width: 72px; height: 72px; color: var(--brass); overflow: visible; }
+.padlock .shackle { transform: translateY(-9px); transition: transform .32s var(--click); }
+.padlock .keyhole { transform-origin: 36px 46px; transition: transform .3s var(--ease), opacity .3s; }
+.padlock .ring { opacity: 0; transform-origin: 36px 40px; }
+.padlock .tick { stroke-dasharray: 22; stroke-dashoffset: 22; }
+
+/* Working: the body breathes while the key is derived. */
+#seal.working .padlock .body { animation: breathe .9s ease-in-out infinite; transform-origin: 36px 46px; }
+@keyframes breathe { 50% { transform: scale(1.04); } }
+
+/* Closed: the shackle drops, the keyhole becomes a tick, a ring goes out. */
+#seal.closed .padlock .shackle { transform: none; }
+#seal.closed .padlock .keyhole { opacity: 0; transform: scale(.4); }
+#seal.closed .padlock .tick { stroke-dashoffset: 0; transition: stroke-dashoffset .28s .18s var(--ease); }
+#seal.closed .padlock .ring, #seal.opened .padlock .ring { animation: ring .55s .12s ease-out; }
+@keyframes ring { from { opacity: .7; transform: scale(.6); } to { opacity: 0; transform: scale(1.5); } }
+
+/* Opening starts closed and lifts. */
+#seal.opening .padlock .shackle { transform: none; transition: none; }
+#seal.opened .padlock .shackle { transform: translateY(-9px) rotate(-14deg); transform-origin: 48px 34px; }
+#seal.opened .padlock { color: var(--mint); transition: color .3s; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

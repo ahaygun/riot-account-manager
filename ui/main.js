@@ -1,0 +1,574 @@
+// Window logic. All real work happens in Rust; this file draws three views
+// (account list, one account's settings, the add-account wizard) and
+// forwards what the user does.
+
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+
+const $ = (id) => document.getElementById(id);
+const GAME_NAMES = { lol: "League / TFT", valorant: "VALORANT", client: "Riot Client" };
+
+let view = { accounts: [], active: null, client: {}, security: {}, unsaved_session: false, pending: null, autostart: false };
+let selected = 0;      // index into the filtered list
+let busy = null;       // id of the account being switched to
+let editing = null;    // id of the account open in the settings view
+let wizard = null;     // null, or { step, mode } while the wizard is open
+let afterUnlock = null; // id of an account to switch to once the lock opens
+
+let shownIds = null;    // account ids last drawn, to animate the list only when it changes
+
+const errorText = (e) => (e && e.message) || String(e);
+const errorKind = (e) => (e && e.kind) || "other";
+
+function show(name) {
+  for (const v of ["list", "edit", "wizard", "unlock", "security"]) $(`view-${v}`).hidden = v !== name;
+}
+
+// ---- the seal ------------------------------------------------------------------
+// A padlock that closes (or opens) over the window while `work` runs, so
+// the moment something is encrypted is visible. It stays up at least long
+// enough to be read, and gets out of the way at once if `work` fails.
+
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function withSeal(kind, text, doneText, work) {
+  const seal = $("seal");
+  const opening = kind === "open";
+  seal.className = opening ? "opening working" : "working";
+  $("seal-text").textContent = text;
+  seal.hidden = false;
+  try {
+    const [result] = await Promise.all([work(), pause(450)]);
+    seal.className = opening ? "opened" : "closed";
+    $("seal-text").textContent = doneText;
+    await pause(750);
+    return result;
+  } finally {
+    seal.classList.add("leaving");
+    await pause(seal.classList.contains("working") ? 0 : 200);
+    seal.hidden = true;
+  }
+}
+
+// ---- account list ---------------------------------------------------------
+
+function visibleAccounts() {
+  const q = $("filter").value.trim().toLocaleLowerCase("tr");
+  return view.accounts.filter((a) => `${a.name} ${a.riot_id || ""}`.toLocaleLowerCase("tr").includes(q));
+}
+
+// `action` is an optional { label, run } shown as a button beside the text.
+function say(text, isError = false, action = null) {
+  $("message").hidden = !text;
+  $("message").classList.toggle("error", isError);
+  $("message-text").textContent = text || "";
+  const btn = $("message-action");
+  btn.hidden = !action;
+  if (action) {
+    btn.textContent = action.label;
+    btn.onclick = action.run;
+  }
+}
+
+function hotkeyLabel(hotkey) {
+  return hotkey.replace(/Key|Digit/g, "").replace("Numpad", "Num ");
+}
+
+function render() {
+  const accounts = visibleAccounts();
+  selected = Math.min(selected, Math.max(accounts.length - 1, 0));
+  const rows = accounts.map((a, i) => row(a, i));
+  if (!rows.length) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = view.accounts.length ? "Eşleşen hesap yok." : "Henüz hesap yok. \"Hesap ekle\" ile başla.";
+    rows.push(empty);
+  }
+  // Rows animate in only when the set of accounts changes, not on the
+  // periodic refresh.
+  const ids = view.accounts.map((a) => a.id).join("|");
+  $("accounts").classList.toggle("arriving", ids !== shownIds);
+  shownIds = ids;
+  $("accounts").replaceChildren(...rows);
+  $("footer-lock").classList.toggle("closed", !!view.security.lock_enabled);
+
+  const isLocked = view.security.lock_enabled && !view.security.unlocked;
+  $("locked").hidden = !isLocked;
+  $("unsaved").hidden = !view.unsaved_session || isLocked;
+  const queued = view.accounts.find((a) => a.id === view.pending);
+  $("queue").hidden = !queued;
+  if (queued) $("queue-text").textContent = `Maç bitince "${queued.name}" hesabına geçilecek.`;
+  $("autostart").checked = !!view.autostart;
+}
+
+function row(a, i) {
+  const li = document.createElement("li");
+  li.className = "account";
+  li.style.setProperty("--i", i);
+  li.classList.toggle("active", a.id === view.active);
+  li.classList.toggle("selected", i === selected);
+  li.classList.toggle("busy", a.id === busy);
+
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "go";
+  go.disabled = busy !== null;
+  go.addEventListener("click", () => switchTo(a));
+
+  const name = document.createElement("span");
+  name.className = "name";
+  const label = document.createElement("span");
+  label.textContent = a.name;
+  name.append(label);
+  if (a.needs_login) name.append(tag("giriş gerekli", true));
+  if (a.hotkey) name.append(tag(hotkeyLabel(a.hotkey)));
+
+  const detail = document.createElement("span");
+  detail.className = "detail";
+  const part = (text, cls = "") => {
+    const s = document.createElement("span");
+    s.textContent = text;
+    s.className = cls;
+    detail.append(s);
+  };
+  if (a.id === view.active) part("Açık", "on");
+  if (a.rank) part(a.rank, "rank");
+  else if (a.level) part("Derecesiz");
+  if (a.level) part(`Seviye ${a.level}`);
+  if (a.game !== "lol") part(GAME_NAMES[a.game]);
+  if (a.riot_id) part(a.riot_id);
+  if (!detail.childElementCount) part(a.has_session ? "Oturum kayıtlı" : "Şifreyle giriş");
+
+  go.append(name, detail);
+
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "more";
+  more.textContent = "⋯";
+  more.title = "Ayarlar";
+  more.addEventListener("click", () => openEdit(a.id));
+
+  li.append(go, more);
+  return li;
+}
+
+function tag(text, warn = false) {
+  const t = document.createElement("span");
+  t.className = warn ? "tag warn" : "tag";
+  t.textContent = text;
+  return t;
+}
+
+async function refresh() {
+  try {
+    view = await invoke("get_state");
+  } catch (e) {
+    say(errorText(e), true);
+    return;
+  }
+  render();
+  if (editing) fillEdit();
+  if (wizard) wizardTick();
+  if (!$("view-security").hidden) fillSecurity();
+}
+
+async function switchTo(a) {
+  if (busy) return;
+  busy = a.id;
+  say(`${a.name} açılıyor…`);
+  render();
+  try {
+    await invoke("switch_account", { id: a.id });
+    say("");
+    $("filter").value = "";
+  } catch (e) {
+    reportSwitchError(e, a.id);
+  } finally {
+    busy = null;
+    await refresh();
+  }
+}
+
+// A switch refused because a match is on can be queued instead; one
+// refused because the app is locked continues after unlocking.
+function reportSwitchError(e, id) {
+  if (errorKind(e) === "locked") return openUnlock(id);
+  if (errorKind(e) !== "in_game") return say(errorText(e), true);
+  say(`${errorText(e)} Maç bitince geçilsin mi?`, true, {
+    label: "Maç bitince geç",
+    run: async () => {
+      try {
+        await invoke("queue_switch", { id });
+        say("");
+      } catch (err) {
+        say(errorText(err), true);
+      }
+      refresh();
+    },
+  });
+}
+
+$("filter").addEventListener("input", () => {
+  selected = 0;
+  render();
+});
+
+document.addEventListener("keydown", (e) => {
+  if ($("view-list").hidden || e.target !== $("filter")) return;
+  const accounts = visibleAccounts();
+  if (e.key === "ArrowDown") selected = Math.min(selected + 1, accounts.length - 1);
+  else if (e.key === "ArrowUp") selected = Math.max(selected - 1, 0);
+  else if (e.key === "Enter" && accounts[selected]) return void switchTo(accounts[selected]);
+  else return;
+  e.preventDefault();
+  render();
+});
+
+$("queue-cancel").addEventListener("click", async () => {
+  await invoke("cancel_queue");
+  refresh();
+});
+
+$("autostart").addEventListener("change", async (e) => {
+  try {
+    await invoke("set_autostart", { enabled: e.target.checked });
+  } catch (err) {
+    say(errorText(err), true);
+  }
+  refresh();
+});
+
+// ---- one account's settings -------------------------------------------------
+
+const editAccount = () => view.accounts.find((a) => a.id === editing);
+
+function openEdit(id) {
+  editing = id;
+  $("edit-message").textContent = "";
+  $("edit-username").value = "";
+  $("edit-password").value = "";
+  $("edit-remove").textContent = "Hesabı sil";
+  $("edit-name").value = editAccount().name;
+  fillEdit();
+  show("edit");
+}
+
+// Fields the user is not typing in are kept in step with the stored state.
+function fillEdit() {
+  const a = editAccount();
+  if (!a) return closeEdit();
+  $("edit-title").textContent = a.name;
+  $("edit-game").value = a.game;
+  $("edit-hotkey").value = a.hotkey ? hotkeyLabel(a.hotkey) : "";
+  $("edit-hotkey-clear").disabled = !a.hotkey;
+  $("edit-cred-state").textContent = a.has_password
+    ? "Şifre kayıtlı. Oturumun süresi dolarsa otomatik yazılır."
+    : "Şifre kaydedersen, oturumun süresi dolduğunda giriş otomatik yapılır. Şifre bu bilgisayarda şifreli saklanır.";
+  $("edit-cred-clear").hidden = !a.has_password;
+}
+
+function closeEdit() {
+  editing = null;
+  show("list");
+  $("filter").focus();
+}
+
+async function editCall(command, args, okText = "") {
+  try {
+    await invoke(command, { id: editing, ...args });
+    $("edit-message").className = "hint";
+    $("edit-message").textContent = okText;
+  } catch (e) {
+    $("edit-message").className = "hint error";
+    $("edit-message").textContent = errorText(e);
+  }
+  await refresh();
+}
+
+$("edit-back").addEventListener("click", closeEdit);
+
+$("edit-name").addEventListener("change", (e) => {
+  const name = e.target.value.trim();
+  if (name && name !== editAccount().name) editCall("rename_account", { name });
+});
+
+$("edit-game").addEventListener("change", (e) => editCall("set_game", { game: e.target.value }));
+
+// Pressing a combination in the hotkey box records it.
+$("edit-hotkey").addEventListener("keydown", (e) => {
+  if (e.key === "Tab") return;
+  e.preventDefault();
+  if (e.key === "Backspace" || e.key === "Delete") return void editCall("set_hotkey", { hotkey: null });
+  if (!/^(Key[A-Z]|Digit\d|Numpad\d|F([1-9]|1[0-2]))$/.test(e.code)) return; // modifier alone, or a key we do not offer
+  const parts = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  parts.push(e.code);
+  editCall("set_hotkey", { hotkey: parts.join("+") }, "Kısayol kaydedildi.");
+});
+
+$("edit-hotkey-clear").addEventListener("click", () => editCall("set_hotkey", { hotkey: null }));
+
+$("edit-cred-save").addEventListener("click", async () => {
+  const args = { id: editing, username: $("edit-username").value, password: $("edit-password").value };
+  try {
+    await withSeal("close", "Şifre şifreleniyor…", "Şifrelendi", () => invoke("set_credentials", args));
+    $("edit-message").className = "hint";
+    $("edit-message").textContent = "Şifre kaydedildi.";
+  } catch (e) {
+    $("edit-message").className = "hint error";
+    $("edit-message").textContent = errorText(e);
+  }
+  await refresh();
+  if ($("edit-message").className === "hint") {
+    $("edit-username").value = "";
+    $("edit-password").value = "";
+  }
+});
+
+$("edit-cred-clear").addEventListener("click", () => editCall("clear_credentials", {}, "Kayıtlı şifre silindi."));
+
+$("edit-shortcut").addEventListener("click", () => editCall("create_shortcut", {}, "Kısayol masaüstüne eklendi."));
+
+$("edit-remove").addEventListener("click", async (e) => {
+  if (e.target.textContent !== "Emin misin? Tekrar tıkla") {
+    e.target.textContent = "Emin misin? Tekrar tıkla"; // first click arms, second deletes
+    return;
+  }
+  await editCall("remove_account", {});
+});
+
+// ---- add-account wizard -------------------------------------------------------
+
+function wizardStep(step) {
+  wizard.step = step;
+  for (const s of ["choose", "wait", "name", "done"]) $(`wiz-${s}`).hidden = s !== step;
+  $("wiz-message").textContent = "";
+}
+
+function openWizard() {
+  if (view.security.lock_enabled && !view.security.unlocked) return openUnlock(null);
+  wizard = { step: "choose", mode: null };
+  $("wiz-intro").textContent = view.accounts.length
+    ? "Hesabı nasıl eklemek istersin?"
+    : "Hoş geldin. İlk hesabını ekleyelim; nasıl eklemek istersin?";
+  show("wizard");
+  wizardStep("choose");
+}
+
+function closeWizard() {
+  wizard = null;
+  show("list");
+  $("filter").focus();
+  refresh();
+}
+
+function wizardFail(e) {
+  $("wiz-message").textContent = errorText(e);
+}
+
+// Shows the naming step. With `mode` "session" the password is optional.
+function wizardName(mode) {
+  wizard.mode = mode;
+  const riotId = view.client.riot_id || "";
+  $("wiz-found").textContent = mode === "session" ? (riotId ? `Giriş yapıldı: ${riotId}` : "Giriş yapıldı.") : "";
+  $("wiz-found").hidden = mode !== "session";
+  $("wiz-name-input").value = mode === "session" ? riotId.split("#")[0] : "";
+  $("wiz-game").value = "lol";
+  $("wiz-username").value = "";
+  $("wiz-pass").value = "";
+  $("wiz-creds-legend").textContent =
+    mode === "session" ? "Oturum dolarsa otomatik giriş için (isteğe bağlı)" : "Riot giriş bilgileri";
+  wizardStep("name");
+  $("wiz-name-input").focus();
+}
+
+// Called on every state refresh while the wizard is open.
+function wizardTick() {
+  if (wizard.step !== "wait") return;
+  const c = view.client;
+  if (c.login === "signed_in" && view.unsaved_session) {
+    if (c.persist === false) {
+      $("wiz-wait-status").textContent =
+        "Giriş yapıldı ama \"Oturumu açık tut\" işaretli değil. Riot Client'ta çıkış yapıp kutuyu işaretleyerek tekrar gir.";
+      $("wiz-wait-status").className = "hint error";
+      return;
+    }
+    return wizardName("session");
+  }
+  $("wiz-wait-status").className = "hint";
+  $("wiz-wait-status").textContent =
+    c.login === "signed_in" ? "Bu hesap zaten kayıtlı. Başka bir hesapla giriş yap."
+    : c.running ? "Giriş bekleniyor…" : "Riot Client açılıyor…";
+}
+
+$("wiz-session").addEventListener("click", async () => {
+  // A session that is already open and unsaved can be saved straight away.
+  if (view.unsaved_session) return wizardName("session");
+  try {
+    await invoke("begin_add");
+    wizardStep("wait");
+    refresh();
+  } catch (e) {
+    wizardFail(e);
+  }
+});
+
+$("wiz-password").addEventListener("click", () => wizardName("password"));
+
+$("wiz-save").addEventListener("click", async () => {
+  const name = $("wiz-name-input").value;
+  const game = $("wiz-game").value;
+  const username = $("wiz-username").value.trim();
+  const password = $("wiz-pass").value;
+  $("wiz-save").disabled = true;
+  try {
+    if (wizard.mode === "password") {
+      await withSeal("close", "Şifre şifreleniyor…", "Şifrelendi", () =>
+        invoke("add_with_password", { name, username, password, game }));
+    } else {
+      if (!!username !== !!password) throw { message: "Otomatik giriş için kullanıcı adı ve şifrenin ikisi de gerekli." };
+      await withSeal("close", "Oturum şifreleniyor…", "Şifrelendi", async () => {
+        const id = await invoke("capture_account", { name, game });
+        if (username) await invoke("set_credentials", { id, username, password });
+      });
+    }
+    $("wiz-done-text").textContent = `"${name.trim()}" kaydedildi.`;
+    wizardStep("done");
+  } catch (e) {
+    wizardFail(e);
+  } finally {
+    $("wiz-save").disabled = false;
+    $("wiz-pass").value = "";
+    refresh();
+  }
+});
+
+$("wiz-another").addEventListener("click", () => wizardStep("choose"));
+$("wiz-finish").addEventListener("click", closeWizard);
+$("wiz-close").addEventListener("click", closeWizard);
+$("add").addEventListener("click", openWizard);
+$("unsaved-save").addEventListener("click", () => {
+  openWizard();
+  wizardName("session");
+});
+
+// ---- unlock prompt -------------------------------------------------------------------
+
+function openUnlock(thenSwitchTo) {
+  afterUnlock = thenSwitchTo;
+  $("unlock-password").value = "";
+  $("unlock-message").textContent = "";
+  show("unlock");
+  $("unlock-password").focus();
+}
+
+$("unlock-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const password = $("unlock-password").value;
+  $("unlock-password").value = "";
+  try {
+    await withSeal("open", "Kilit açılıyor…", "Açıldı", () => invoke("unlock", { password }));
+  } catch (err) {
+    $("unlock-message").textContent = errorText(err);
+    return;
+  }
+  const next = view.accounts.find((a) => a.id === afterUnlock);
+  afterUnlock = null;
+  show("list");
+  await refresh();
+  if (next) switchTo(next);
+});
+
+$("unlock-back").addEventListener("click", () => {
+  afterUnlock = null;
+  show("list");
+});
+$("locked-open").addEventListener("click", () => openUnlock(null));
+
+// ---- security screen -----------------------------------------------------------------
+
+function fillSecurity() {
+  const sec = view.security;
+  $("sec-counts").textContent =
+    `${view.accounts.length} hesap, ${sec.saved_sessions} kayıtlı oturum, ${sec.saved_passwords} kayıtlı şifre.`;
+  $("sec-path").textContent = sec.data_dir || "";
+  $("sec-lock-off").hidden = !!sec.lock_enabled;
+  $("sec-lock-on").hidden = !sec.lock_enabled;
+  $("sec-lock-now").disabled = !sec.unlocked;
+  $("sec-lock-state").textContent = sec.lock_enabled
+    ? "Açık. Uygulama her başladığında, hesap değiştirmeden önce ana şifre sorulur."
+    : "Kapalı. Açarsan kayıtlı oturumlar ve şifreler ayrıca bir ana şifreyle şifrelenir; uygulama her başladığında bir kez sorulur. Ana şifre unutulursa kurtarılamaz.";
+}
+
+function secSay(text, isError = false) {
+  $("sec-message").className = isError ? "hint error" : "hint";
+  $("sec-message").textContent = text;
+}
+
+// With `sealText`, the padlock closes over the window while it runs.
+async function secCall(command, args, okText, sealText = null) {
+  try {
+    if (sealText) await withSeal("close", sealText, "Kilitlendi", () => invoke(command, args));
+    else await invoke(command, args);
+    secSay(okText);
+  } catch (e) {
+    secSay(errorText(e), true);
+  }
+  for (const id of ["sec-new", "sec-new2", "sec-current"]) $(id).value = "";
+  await refresh();
+}
+
+$("security").addEventListener("click", () => {
+  secSay("");
+  $("sec-wipe").textContent = "Tüm verileri sil";
+  fillSecurity();
+  show("security");
+});
+$("sec-back").addEventListener("click", () => show("list"));
+$("sec-open").addEventListener("click", () => secCall("open_data_dir", {}, ""));
+$("sec-enable").addEventListener("click", () => {
+  if ($("sec-new").value !== $("sec-new2").value) return secSay("İki şifre aynı değil.", true);
+  const password = $("sec-new").value;
+  secCall("set_lock", { current: null, new: password }, "Uygulama kilidi etkin.", "Oturumlar ve şifreler kilitleniyor…");
+});
+$("sec-disable").addEventListener("click", () =>
+  secCall("set_lock", { current: $("sec-current").value, new: null }, "Uygulama kilidi kaldırıldı."));
+$("sec-lock-now").addEventListener("click", async () => {
+  await withSeal("close", "Kilitleniyor…", "Kilitlendi", () => invoke("lock_now"));
+  show("list");
+  refresh();
+});
+$("sec-wipe").addEventListener("click", async (e) => {
+  if (e.target.textContent !== "Emin misin? Geri alınamaz. Tekrar tıkla") {
+    e.target.textContent = "Emin misin? Geri alınamaz. Tekrar tıkla"; // first click arms
+    return;
+  }
+  e.target.textContent = "Tüm verileri sil";
+  await secCall("wipe_all", {}, "Tüm veriler silindi.");
+});
+
+// ---- events from the app --------------------------------------------------------
+
+listen("state-changed", refresh);
+listen("notice", (e) => {
+  const n = e.payload;
+  if ((n.kind === "in_game" || n.kind === "locked") && n.account) reportSwitchError({ kind: n.kind, message: n.text }, n.account);
+  else say(n.text, n.error);
+});
+window.addEventListener("focus", () => {
+  if (!$("view-list").hidden) $("filter").focus();
+  refresh();
+});
+// What Riot Client is doing shows up in its own state, not as an event:
+// poll while the window is on screen, faster while the wizard is waiting.
+setInterval(() => {
+  if (document.visibilityState === "visible" && !busy) refresh();
+}, 2000);
+
+(async () => {
+  await refresh();
+  if (!view.accounts.length) openWizard(); // first run
+  else $("filter").focus();
+})();
