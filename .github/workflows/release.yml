@@ -119,10 +119,18 @@ jobs:
         if: steps.version.outputs.publish == 'true'
         shell: bash
         run: |
+          exe=$(cd target/release/bundle/nsis && ls *-setup.exe)
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          **İndir:** [\`$exe\`](https://github.com/$GITHUB_REPOSITORY/releases/download/${{ steps.version.outputs.tag }}/$exe)
+
+          Çalıştır. Windows "bilinmeyen yayıncı" uyarısı gösterirse **Ek bilgi**, sonra **Yine de çalıştır**. Kurulu sürümün varsa üstüne kurulur; hesapların ve ayarların korunur.
+
+          Diğer dosyaları indirmen gerekmez: \`latest.json\` ve \`.sig\` uygulamanın otomatik güncellemesi içindir, \`SHA256SUMS.txt\` ise indirilen dosyanın bozulmadığını elle denetlemek isteyenler için.
+          NOTES
           cd target/release/bundle/nsis
           files=(*-setup.exe SHA256SUMS.txt)
           [ -f latest.json ] && files+=(latest.json *-setup.exe.sig)
           gh release create "${{ steps.version.outputs.tag }}" "${files[@]}" \
             --target "$GITHUB_SHA" \
             --title "QuickSwitch ${{ steps.version.outputs.tag }}" \
-            --notes "Kurulum: aşağıdaki \`setup.exe\` dosyasını indirip çalıştır. Windows \"bilinmeyen yayıncı\" uyarısı gösterirse **Ek bilgi**, sonra **Yine de çalıştır**. Dosyanın bozulmadığını \`SHA256SUMS.txt\` ile karşılaştırabilirsin."
+            --notes-file "$RUNNER_TEMP/notes.md"
