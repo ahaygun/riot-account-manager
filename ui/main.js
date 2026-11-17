@@ -632,7 +632,7 @@ $("sec-update-check").addEventListener("click", (e) =>
   }));
 $("update-install").addEventListener("click", (e) =>
   whileWorking(e.currentTarget, async () => {
-    say("Güncelleme indiriliyor ve doğrulanıyor…");
+    say("Güncelleme indiriliyor…");
     try {
       await invoke("install_update"); // the app restarts on success
     } catch (err) {
@@ -651,6 +651,12 @@ $("sec-wipe").addEventListener("click", async (e) => {
 // ---- events from the app --------------------------------------------------------
 
 listen("state-changed", refresh);
+listen("update-progress", (e) => {
+  const p = e.payload;
+  say(p.installing ? "Kuruluyor, uygulama birazdan yeniden açılacak…"
+    : p.percent == null ? "Güncelleme indiriliyor…"
+    : `Güncelleme indiriliyor: %${p.percent}`);
+});
 listen("notice", (e) => {
   const n = e.payload;
   if ((n.kind === "in_game" || n.kind === "locked") && n.account) reportSwitchError({ kind: n.kind, message: n.text }, n.account);

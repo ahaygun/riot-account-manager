@@ -342,22 +342,25 @@ fn open_data_dir(app: AppHandle) -> CmdResult<()> {
 // key built into this app. Nothing is installed without the user's click.
 
 /// Looks for a newer version and remembers it. Returns its version.
-fn find_update(app: &AppHandle) -> Result<Option<String>, String> {
-    let shared = app.state::<Shared>();
-    if !shared.can_update {
+///
+/// Async on purpose: commands already run on the async runtime, and
+/// blocking on a future from inside it aborts the task. The background
+/// thread, which is not on the runtime, drives this with `block_on`.
+async fn find_update(app: &AppHandle) -> Result<Option<String>, String> {
+    if !app.state::<Shared>().can_update {
         return Ok(None);
     }
     let updater = app.updater().map_err(|e| e.to_string())?;
-    let found = tauri::async_runtime::block_on(updater.check()).map_err(|e| e.to_string())?;
+    let found = updater.check().await.map_err(|e| e.to_string())?;
     let version = found.as_ref().map(|u| u.version.clone());
-    *lock(&shared.update) = found;
+    *lock(&app.state::<Shared>().update) = found;
     changed(app);
     Ok(version)
 }
 
-#[tauri::command(async)]
-fn check_update_now(app: AppHandle) -> CmdResult<Option<String>> {
-    find_update(&app).map_err(|e| other(format!("Güncelleme denetlenemedi: {e}")))
+#[tauri::command]
+async fn check_update_now(app: AppHandle) -> CmdResult<Option<String>> {
+    find_update(&app).await.map_err(|e| other(format!("Güncelleme denetlenemedi: {e}")))
 }
 
 #[tauri::command(async)]
@@ -371,20 +374,45 @@ fn set_update_checks(app: AppHandle, enabled: bool) -> CmdResult<()> {
     Ok(())
 }
 
+#[derive(Clone, Serialize)]
+struct UpdateProgress {
+    /// 0 to 100, when the size is known.
+    percent: Option<u8>,
+    /// The download is done and the installer is starting.
+    installing: bool,
+}
+
 /// Downloads the waiting update, verifies its signature, runs the
-/// installer and restarts into the new version.
-#[tauri::command(async)]
-fn install_update(app: AppHandle) -> CmdResult<()> {
-    let shared = app.state::<Shared>();
-    let Some(update) = lock(&shared.update).clone() else {
+/// installer and restarts into the new version. Reports progress as
+/// `update-progress` events.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> CmdResult<()> {
+    let update = lock(&app.state::<Shared>().update).clone();
+    let Some(update) = update else {
         return Err(other("Kurulacak bir güncelleme yok."));
     };
-    // Not in the middle of a switch, and not while a match is on.
-    let _ops = lock(&shared.ops);
-    if shared.sw.in_game() {
+    if app.state::<Shared>().sw.in_game() {
         return Err(other("Oyun açıkken güncelleme kurulmaz."));
     }
-    tauri::async_runtime::block_on(update.download_and_install(|_, _| {}, || {}))
+    let mut received: u64 = 0;
+    let mut last_percent = None;
+    let progress_app = app.clone();
+    let done_app = app.clone();
+    update
+        .download_and_install(
+            move |chunk, total| {
+                received += chunk as u64;
+                let percent = total.filter(|t| *t > 0).map(|t| (received * 100 / t).min(100) as u8);
+                if percent != last_percent {
+                    last_percent = percent;
+                    let _ = progress_app.emit("update-progress", UpdateProgress { percent, installing: false });
+                }
+            },
+            move || {
+                let _ = done_app.emit("update-progress", UpdateProgress { percent: Some(100), installing: true });
+            },
+        )
+        .await
         .map_err(|e| other(format!("Güncelleme kurulamadı: {e}")))?;
     app.restart();
 }
@@ -515,7 +543,7 @@ fn background_loop(app: AppHandle) {
 
         if shared.can_update && tick % UPDATE_EVERY == UPDATE_FIRST_TICK && shared.sw.config().map(|c| c.check_updates).unwrap_or(false) {
             // Offline or no release yet: simply try again next time.
-            let _ = find_update(&app);
+            let _ = tauri::async_runtime::block_on(find_update(&app));
         }
 
         if tick % UPKEEP_EVERY == 0 {
