@@ -54,6 +54,19 @@ async function withSeal(kind, text, doneText, work) {
   }
 }
 
+// Marks a button as working for as long as `work` runs: it is disabled and
+// shows a moving line, so a press is never met with silence.
+async function whileWorking(button, work) {
+  button.disabled = true;
+  button.classList.add("working");
+  try {
+    return await work();
+  } finally {
+    button.disabled = false;
+    button.classList.remove("working");
+  }
+}
+
 // ---- account list ---------------------------------------------------------
 
 function visibleAccounts() {
@@ -349,7 +362,8 @@ $("edit-cred-save").addEventListener("click", async () => {
 
 $("edit-cred-clear").addEventListener("click", () => editCall("clear_credentials", {}, "Kayıtlı şifre silindi."));
 
-$("edit-shortcut").addEventListener("click", () => editCall("create_shortcut", {}, "Kısayol masaüstüne eklendi."));
+$("edit-shortcut").addEventListener("click", (e) =>
+  whileWorking(e.currentTarget, () => editCall("create_shortcut", {}, "Kısayol masaüstüne eklendi.")));
 
 $("edit-remove").addEventListener("click", async (e) => {
   if (e.target.textContent !== "Emin misin? Tekrar tıkla") {
@@ -404,10 +418,27 @@ function wizardName(mode) {
   $("wiz-name-input").focus();
 }
 
+// The wait step says "opening" until Riot Client is really up, then shows
+// what to do in it.
+function wizardWaitTitle(opening) {
+  $("wiz-wait-title").textContent = opening ? "Riot Client açılıyor…" : "Riot Client açıldı.";
+  $("wiz-wait-bar").hidden = !opening;
+  $("wiz-wait-steps").hidden = opening;
+  if (opening) {
+    $("wiz-anyway").hidden = true;
+    $("wiz-wait-status").className = "hint";
+    $("wiz-wait-status").textContent = "Bu birkaç saniye sürebilir.";
+  }
+}
+
 // Called on every state refresh while the wizard is open.
 function wizardTick() {
   if (wizard.step !== "wait") return;
   const c = view.client;
+  // Up means the client answers: until then its window may not even exist.
+  const opening = wizard.opening || !c.running || c.login === "unknown";
+  wizardWaitTitle(opening);
+  if (opening) return;
   if (c.login === "signed_in" && view.unsaved_session) {
     // Riot Client's own report about the box is sometimes wrong, so it is
     // a warning with a way through, never a dead end.
@@ -423,18 +454,24 @@ function wizardTick() {
   $("wiz-anyway").hidden = true;
   $("wiz-wait-status").className = "hint";
   $("wiz-wait-status").textContent =
-    c.login === "signed_in" ? "Bu hesap zaten kayıtlı. Başka bir hesapla giriş yap."
-    : c.running ? "Giriş bekleniyor…" : "Riot Client açılıyor…";
+    c.login === "signed_in" ? "Bu hesap zaten kayıtlı. Başka bir hesapla giriş yap." : "Giriş bekleniyor…";
 }
 
 $("wiz-session").addEventListener("click", async () => {
   // A session that is already open and unsaved can be saved straight away.
   if (view.unsaved_session) return wizardName("session");
+  // Show the wait step at once: closing the running client and starting
+  // a fresh one takes a few seconds, and the press must be acknowledged.
+  wizard.opening = true;
+  wizardStep("wait");
+  wizardWaitTitle(true);
   try {
     await invoke("begin_add");
-    wizardStep("wait");
+    wizard.opening = false;
     refresh();
   } catch (e) {
+    wizard.opening = false;
+    wizardStep("choose");
     wizardFail(e);
   }
 });
@@ -555,14 +592,15 @@ $("security").addEventListener("click", () => {
   show("security");
 });
 $("sec-back").addEventListener("click", () => show("list"));
-$("sec-open").addEventListener("click", () => secCall("open_data_dir", {}, ""));
+$("sec-open").addEventListener("click", (e) => whileWorking(e.currentTarget, () => secCall("open_data_dir", {}, "")));
 $("sec-enable").addEventListener("click", () => {
   if ($("sec-new").value !== $("sec-new2").value) return secSay("İki şifre aynı değil.", true);
   const password = $("sec-new").value;
   secCall("set_lock", { current: null, new: password }, "Uygulama kilidi etkin.", "Oturumlar ve şifreler kilitleniyor…");
 });
-$("sec-disable").addEventListener("click", () =>
-  secCall("set_lock", { current: $("sec-current").value, new: null }, "Uygulama kilidi kaldırıldı."));
+$("sec-disable").addEventListener("click", (e) =>
+  whileWorking(e.currentTarget, () =>
+    secCall("set_lock", { current: $("sec-current").value, new: null }, "Uygulama kilidi kaldırıldı.")));
 $("sec-lock-now").addEventListener("click", async () => {
   await withSeal("close", "Kilitleniyor…", "Kilitlendi", () => invoke("lock_now"));
   show("list");
