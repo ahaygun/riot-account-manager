@@ -311,7 +311,7 @@ impl Switcher {
 
     pub fn config(&self) -> Result<Config> {
         let path = self.env.data_dir.join("config.json");
-        let cfg: Config = store::load_json(&path)?;
+        let cfg: Config = store::load_json::<Config>(&path)?.migrate();
         if !path.exists() {
             // Write the defaults once so the user has something to edit.
             let _ = store::save_json(&path, &cfg);

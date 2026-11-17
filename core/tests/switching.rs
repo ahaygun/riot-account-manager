@@ -85,7 +85,6 @@ impl World {
         fs::write(path, format!("psl:\n    authorization:\n        riot-client:\n            refresh_token: \"{token}\"\n")).unwrap();
         let cfg = self.riot.join("Riot Client/Config");
         fs::create_dir_all(&cfg).unwrap();
-        fs::write(cfg.join("RiotClientSettings.yaml"), format!("settings-for: {token}\n")).unwrap();
         fs::write(cfg.join("lockfile"), "Riot Client:1:5000:pw:https").unwrap();
     }
 
@@ -269,19 +268,50 @@ fn switches_and_keeps_renewed_sessions() {
 }
 
 #[test]
-fn the_lockfile_is_never_stored_or_restored() {
-    let f = fixture("lockfile");
+fn riot_client_settings_are_never_saved_or_replaced() {
+    let f = fixture("settings");
     two_accounts(&f);
+    let settings = f.w.riot.join("Riot Client/Config/RiotClientSettings.yaml");
+    // The user turns the login music off in Riot Client.
+    fs::write(&settings, "volume_settings:\n    videos:\n        muted: true\n").unwrap();
     f.sw.switch("ana-hesap", None).unwrap();
-    f.w.stop(true);
-    assert!(f.w.riot.join("Riot Client/Config/RiotClientSettings.yaml").is_file());
-    fs::remove_file(f.w.riot.join("Riot Client/Config/lockfile")).unwrap();
     f.sw.switch("smurf", None).unwrap();
-    assert!(!f.w.riot.join("Riot Client/Config/lockfile").exists());
-    assert_eq!(
-        fs::read_to_string(f.w.riot.join("Riot Client/Config/RiotClientSettings.yaml")).unwrap(),
-        "settings-for: B-1\n"
-    );
+    f.sw.new_login().unwrap(); // adding an account used to wipe the folder
+    f.w.sign_in_by_hand("puuid-C", "C-1", true);
+    f.sw.capture_new("Üç", Game::Lol).unwrap();
+    f.sw.add_with_credentials("Dört", "u", "p", Game::Lol).unwrap();
+    f.sw.switch("d-rt", None).unwrap(); // password-only: starts signed out
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert!(fs::read_to_string(&settings).unwrap().contains("muted: true"), "the user's choice survived");
+    assert!(f.w.riot.join("Riot Client/Config/lockfile").exists(), "the running client's lockfile is left alone");
+}
+
+#[test]
+fn snapshots_from_older_versions_do_not_bring_back_old_settings() {
+    let f = fixture("legacy");
+    // An old config.json that still lists the settings folder.
+    let old = Config {
+        riot_client_exe: Some(f.root.join("RiotClientServices.exe")),
+        session_paths: { let mut p = Config::default().session_paths; p.push("Riot Client/Config".into()); p },
+        ..Config::default()
+    };
+    save_json(&f.sw.env.data_dir.join("config.json"), &old).unwrap();
+    let settings = f.w.riot.join("Riot Client/Config/RiotClientSettings.yaml");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(&settings, "muted: false").unwrap(); // what was there when the account was added
+    f.w.sign_in_by_hand("puuid-A", "A-1", true);
+    // Simulate an old capture: write the snapshot with the settings folder in it.
+    f.w.stop(true);
+    let snap = quickswitch_core::snapshot::Snapshot::collect(&f.w.riot, &old.session_paths).unwrap();
+    assert!(snap.files.iter().any(|(p, _)| p.starts_with("Riot Client/Config/")));
+    f.sw.capture_new("A", Game::Lol).unwrap();
+    std::fs::write(f.sw.env.snapshot_file("a"), quickswitch_core::vault::seal_with(None, &snap.encode()).unwrap()).unwrap();
+
+    fs::write(&settings, "muted: true").unwrap(); // the user's current choice
+    f.sw.new_login().unwrap();
+    f.sw.switch("a", None).unwrap();
+    assert_eq!(fs::read_to_string(&settings).unwrap(), "muted: true");
+    assert!(f.w.live_token().contains("A-1"), "the session itself still came back");
 }
 
 #[test]

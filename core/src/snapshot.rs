@@ -34,21 +34,22 @@ impl Snapshot {
     }
 
     /// Replaces every session path under `root` with this snapshot's content.
+    ///
+    /// Files outside the session paths are skipped, not written: snapshots
+    /// made by older versions also hold Riot Client's settings folder, which
+    /// is no longer treated as part of a session.
     pub fn restore(&self, root: &Path, session_paths: &[String]) -> io::Result<()> {
         let allowed: Vec<String> = session_paths.iter().map(|p| normalize(p)).collect::<Result<_, _>>()?;
         // Validate first, so a bad snapshot changes nothing.
-        for (rel, _) in &self.files {
+        let mut keep = Vec::new();
+        for (rel, data) in &self.files {
             let rel = normalize(rel)?;
-            let inside = allowed.iter().any(|a| rel == *a || rel.starts_with(&format!("{a}/")));
-            if !inside {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("snapshot path outside session paths: {rel}"),
-                ));
+            if allowed.iter().any(|a| rel == *a || rel.starts_with(&format!("{a}/"))) {
+                keep.push((rel, data));
             }
         }
         clear(root, session_paths)?;
-        for (rel, data) in &self.files {
+        for (rel, data) in keep {
             let abs = root.join(rel);
             if let Some(parent) = abs.parent() {
                 fs::create_dir_all(parent)?;
@@ -166,6 +167,22 @@ mod tests {
         let s = Snapshot { files: vec![("a/b.yaml".into(), b"hello".to_vec()), ("c".into(), vec![])] };
         assert_eq!(Snapshot::decode(&s.encode()).unwrap(), s);
         assert!(Snapshot::decode(&s.encode()[..7]).is_err());
+    }
+
+    #[test]
+    fn restore_skips_files_outside_the_session_paths() {
+        let root = std::env::temp_dir().join(format!("qsw-snap-skip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Config")).unwrap();
+        fs::write(root.join("Config/settings.yaml"), "muted: true").unwrap();
+        let old = Snapshot { files: vec![("Data/s.yaml".into(), b"token".to_vec()), ("Config/settings.yaml".into(), b"muted: false".to_vec())] };
+        old.restore(&root, &["Data/s.yaml".to_string()]).unwrap();
+        assert_eq!(fs::read_to_string(root.join("Data/s.yaml")).unwrap(), "token");
+        assert_eq!(fs::read_to_string(root.join("Config/settings.yaml")).unwrap(), "muted: true", "user settings untouched");
+        // A path that escapes is still refused outright.
+        let bad = Snapshot { files: vec![("../x".into(), vec![])] };
+        assert!(bad.restore(&root, &["Data/s.yaml".to_string()]).is_err());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

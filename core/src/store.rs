@@ -112,7 +112,9 @@ pub struct Config {
     /// Full path to RiotClientServices.exe. Found automatically when empty.
     pub riot_client_exe: Option<PathBuf>,
     /// Files and folders, relative to `%LOCALAPPDATA%\Riot Games`, that
-    /// together make up a signed-in session.
+    /// together make up a signed-in session. Riot Client's `Config` folder
+    /// is deliberately not one of them: it holds the user's own settings
+    /// (login music and video, language) and a large download cache.
     pub session_paths: Vec<String>,
     /// Client processes; they must all be gone before session files move.
     pub client_processes: Vec<String>,
@@ -135,7 +137,6 @@ impl Default for Config {
                 "Riot Client/Data/RiotGamesPrivateSettings.yaml",
                 "League of Legends/Data/RiotGamesPrivateSettings.yaml",
                 "Riot Client/Data/Sessions",
-                "Riot Client/Config",
             ]),
             client_processes: s(&[
                 "RiotClientServices.exe",
@@ -150,6 +151,23 @@ impl Default for Config {
             ui_processes: s(&["Riot Client.exe", "RiotClientUx.exe"]),
             check_updates: true,
         }
+    }
+}
+
+/// Folders older versions saved with every session. They hold device
+/// settings, not login state, and are removed from a stored config.
+const NOT_SESSION: [&str; 1] = ["Riot Client/Config"];
+
+impl Config {
+    /// Drops entries that older versions wrote into `config.json` but that
+    /// must not be part of a session.
+    pub fn migrate(mut self) -> Self {
+        self.session_paths.retain(|p| {
+            let p = p.replace('\\', "/");
+            let p = p.trim_end_matches('/');
+            !NOT_SESSION.iter().any(|n| p.eq_ignore_ascii_case(n))
+        });
+        self
     }
 }
 
@@ -218,5 +236,20 @@ mod tests {
         assert_eq!(serde_json::to_string(&Game::Both).unwrap(), "\"both\"");
         assert_eq!(serde_json::from_str::<Game>("\"both\"").unwrap(), Game::Both);
         assert_eq!(Game::Both.launch_args(), Game::Lol.launch_args());
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::Config;
+
+    #[test]
+    fn old_configs_lose_the_settings_folder() {
+        let mut old = Config::default();
+        old.session_paths.push("Riot Client/Config".into());
+        old.session_paths.push("Riot Client\\Config\\".into());
+        let new = old.migrate();
+        assert!(new.session_paths.iter().all(|p| !p.to_lowercase().contains("config")));
+        assert_eq!(new.session_paths, Config::default().session_paths);
     }
 }
