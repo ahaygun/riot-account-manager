@@ -126,6 +126,9 @@ pub struct Config {
     /// connection to the internet, and only exists in builds that were
     /// made with an update signing key.
     pub check_updates: bool,
+    /// Global hotkey that opens the window. Not Ctrl+Alt+letter: on many
+    /// keyboards (Turkish among them) that is AltGr, which types characters.
+    pub window_hotkey: String,
 }
 
 impl Default for Config {
@@ -150,6 +153,7 @@ impl Default for Config {
             game_processes: s(&["League of Legends.exe", "VALORANT-Win64-Shipping.exe"]),
             ui_processes: s(&["Riot Client.exe", "RiotClientUx.exe"]),
             check_updates: true,
+            window_hotkey: "Ctrl+Shift+Space".into(),
         }
     }
 }

@@ -48,6 +48,9 @@ pub trait ClientApi: Send + Sync {
     fn start_product(&self, product: &str) -> bool;
     /// Summoner details from the League client, if it is running.
     fn league(&self) -> Option<LeagueInfo>;
+    /// Where the League client is in a match's life ("Lobby",
+    /// "ChampSelect", "InProgress", ...), if it is running.
+    fn league_phase(&self) -> Option<String>;
 }
 
 /// Real implementation.
@@ -219,6 +222,12 @@ impl ClientApi for LocalApi {
             level: me.get("summonerLevel").and_then(Value::as_u64),
             rank: rank_from(&stats),
         })
+    }
+
+    fn league_phase(&self) -> Option<String> {
+        let access = self.league_access()?;
+        let phase = get(&access, "/lol-gameflow/v1/gameflow-phase").ok().flatten()?;
+        phase.as_str().map(String::from)
     }
 }
 

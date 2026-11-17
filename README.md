@@ -34,8 +34,8 @@ Oturumu kaydederken Riot Client kapatılır; oturum diske ancak düzgün kapanı
 
 - Pencere: hesaba tıkla ya da adını yazıp Enter'a bas.
 - Tepsi simgesi: sağ tık, hesabı seç.
-- `Ctrl+Alt+R`: pencereyi her yerden açar.
-- Hesap kısayolu: hesabın ayarlarında (⋯) kısayol kutusuna tıklayıp tuşlara bas, örneğin `Ctrl+Alt+1`.
+- `Ctrl+Shift+Space`: pencereyi her yerden açar (Ayarlar'dan değiştirilebilir).
+- Hesap kısayolu: hesabın ayarlarında (⋯) kısayol kutusuna tıklayıp tuşlara bas, örneğin `Ctrl+Shift+1`. Türkçe klavyede Ctrl+Alt, AltGr ile aynıdır; karakter yazan bir kombinasyon (AltGr+3 = #) kısayol yapılamaz.
 - Masaüstü kısayolu: hesabın ayarlarında **Masaüstü kısayolu oluştur**.
 - Komut satırı: `quickswitch.exe --switch "Hesap Adı"`.
 
@@ -54,7 +54,7 @@ Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 - Riot ID, tek/çift sıralama ligi ve seviye: League istemcisi o hesapla açıkken okunur ve hatırlanır.
 - **giriş gerekli:** kayıtlı oturum son denemede kabul edilmedi. Şifre kayıtlıysa otomatik girilir; değilse Riot Client'ta "Oturumu açık tut" ile bir kez elle gir, kayıt kendiliğinden yenilenir.
 
-**Açılışta başlat** anahtarı uygulamayı Windows açılınca tepside gizli başlatır.
+**Ayarlar** (sağ alttaki dişli): sürüm ve güncellemeler, Windows açılınca tepside başlatma, pencereyi açan kısayol, güvenlik ve veriler.
 
 ## Otomatik giriş hakkında
 

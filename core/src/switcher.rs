@@ -20,6 +20,9 @@ pub enum Error {
     Io(io::Error),
     /// A match is running; switching would kick the player out.
     InGame(Vec<String>),
+    /// The League client is in queue, a ready check or champion select:
+    /// closing it now would leave the queue or count as a dodge.
+    InMatchmaking(&'static str),
     /// Riot Client did not close.
     StillRunning(Vec<String>),
     /// Nobody is signed in.
@@ -52,7 +55,7 @@ impl Error {
     pub fn kind(&self) -> &'static str {
         match self {
             Error::Io(_) => "io",
-            Error::InGame(_) => "in_game",
+            Error::InGame(_) | Error::InMatchmaking(_) => "in_game",
             Error::StillRunning(_) => "still_running",
             Error::NoSession => "no_session",
             Error::NotPersisted => "not_persisted",
@@ -74,6 +77,7 @@ impl fmt::Display for Error {
         match self {
             Error::Io(e) => write!(f, "Dosya hatası: {e}"),
             Error::InGame(p) => write!(f, "Oyun açık ({}). Oyun kapanmadan hesap değiştirilmez.", p.join(", ")),
+            Error::InMatchmaking(what) => write!(f, "{what}; şimdi hesap değiştirmek seni sıradan çıkarır ya da maçtan kaçmış sayar."),
             Error::StillRunning(p) => write!(f, "Riot Client kapatılamadı: {}", p.join(", ")),
             Error::NoSession => write!(f, "Riot Client'ta açık bir oturum yok."),
             Error::NotPersisted => write!(
@@ -325,6 +329,17 @@ impl Switcher {
         Ok(store::save_json(&self.env.data_dir.join("config.json"), &cfg)?)
     }
 
+    /// `hotkey` is stored as given; the app layer decides what is valid.
+    pub fn set_window_hotkey(&self, hotkey: &str) -> Result<()> {
+        let hotkey = clean(hotkey, "Kısayol")?;
+        if let Some(other) = self.state()?.accounts.iter().find(|a| a.hotkey.as_deref() == Some(hotkey.as_str())) {
+            return Err(Error::HotkeyTaken(other.name.clone()));
+        }
+        let mut cfg = self.config()?;
+        cfg.window_hotkey = hotkey;
+        Ok(store::save_json(&self.env.data_dir.join("config.json"), &cfg)?)
+    }
+
     fn write_snapshot(&self, id: &str, snap: &Snapshot) -> Result<()> {
         let blob = self.vault.seal(&snap.encode())?;
         Ok(store::write_atomic(&self.env.snapshot_file(id), &blob)?)
@@ -394,9 +409,9 @@ impl Switcher {
         })
     }
 
-    /// A match is running right now.
+    /// A match is running, or the League client is on its way into one.
     pub fn in_game(&self) -> bool {
-        self.config().map(|cfg| !self.procs.running(&cfg.game_processes).is_empty()).unwrap_or(false)
+        self.config().map(|cfg| self.ensure_not_in_game(&cfg).is_err()).unwrap_or(false)
     }
 
     pub fn account_name(&self, id: &str) -> Option<String> {
@@ -407,7 +422,15 @@ impl Switcher {
 
     fn ensure_not_in_game(&self, cfg: &Config) -> Result<()> {
         let games = self.procs.running(&cfg.game_processes);
-        if games.is_empty() { Ok(()) } else { Err(Error::InGame(games)) }
+        if !games.is_empty() {
+            return Err(Error::InGame(games));
+        }
+        // Only asked when the League client runs, which is when it matters.
+        let league_up = !self.procs.running(&["LeagueClientUx.exe".to_string()]).is_empty();
+        if let Some(what) = league_up.then(|| self.api.league_phase()).flatten().as_deref().and_then(matchmaking) {
+            return Err(Error::InMatchmaking(what));
+        }
+        Ok(())
     }
 
     /// Closes Riot Client the polite way first: only a proper quit makes it
@@ -939,6 +962,17 @@ fn owner<'a>(state: &'a State, live: &Live) -> Option<&'a Account> {
         return None;
     }
     owner_by(state, live.puuid())
+}
+
+/// The League client phases in which closing it costs the player something.
+fn matchmaking(phase: &str) -> Option<&'static str> {
+    match phase {
+        "Matchmaking" => Some("Sıradasın"),
+        "ReadyCheck" => Some("Maç bulundu"),
+        "ChampSelect" => Some("Şampiyon seçimindesin"),
+        "GameStart" | "InProgress" | "Reconnect" => Some("Maçtasın"),
+        _ => None,
+    }
 }
 
 fn find<'a>(state: &'a State, target: &str) -> Option<&'a Account> {

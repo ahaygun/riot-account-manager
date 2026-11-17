@@ -16,8 +16,6 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 const TRAY_ID: &str = "main";
-/// Opens the picker from anywhere.
-const TOGGLE_HOTKEY: &str = "Ctrl+Alt+KeyR";
 const TICK: Duration = Duration::from_secs(3);
 /// Upkeep (filing sessions, reading rank) runs every this many ticks.
 const UPKEEP_EVERY: u32 = 5;
@@ -149,6 +147,8 @@ struct AppView {
     autostart: bool,
     version: &'static str,
     update: UpdateView,
+    /// Global hotkey that opens the window.
+    window_hotkey: String,
 }
 
 #[derive(Serialize)]
@@ -176,6 +176,7 @@ fn get_state(app: AppHandle) -> CmdResult<AppView> {
             enabled: shared.sw.config().map(|c| c.check_updates).unwrap_or(true),
             available,
         },
+        window_hotkey: shared.sw.config().map(|c| c.window_hotkey).unwrap_or_default(),
     })
 }
 
@@ -274,7 +275,7 @@ fn clear_credentials(app: AppHandle, id: String) -> CmdResult<()> {
 fn set_hotkey(app: AppHandle, id: String, hotkey: Option<String>) -> CmdResult<()> {
     let hotkey = hotkey.filter(|h| !h.trim().is_empty());
     if let Some(h) = &hotkey {
-        check_hotkey(h).map_err(other)?;
+        check_hotkey(h, &window_hotkey(&app)).map_err(other)?;
     }
     edit(&app, |sw| sw.set_hotkey(&id, hotkey.as_deref()))?;
     register_hotkeys(&app);
@@ -425,16 +426,36 @@ async fn install_update(app: AppHandle) -> CmdResult<()> {
 // ---- hotkeys -------------------------------------------------------------------
 
 /// A hotkey must parse and must include Ctrl or Alt, so a plain letter can
-/// never be taken away from every other program.
-fn check_hotkey(text: &str) -> Result<Shortcut, String> {
+/// never be taken away from every other program. (Whether Ctrl+Alt+key
+/// types a character on the user's keyboard is checked by the window,
+/// which sees the keyboard layout.)
+fn parse_hotkey(text: &str) -> Result<Shortcut, String> {
     let has_modifier = text.split('+').any(|part| matches!(part.trim().to_ascii_lowercase().as_str(), "ctrl" | "control" | "alt"));
     if !has_modifier {
         return Err("Kısayolda Ctrl ya da Alt olmalı.".into());
     }
-    if text.eq_ignore_ascii_case(TOGGLE_HOTKEY) {
-        return Err("Bu kısayol pencereyi açmak için ayrılmış.".into());
-    }
     Shortcut::from_str(text).map_err(|_| format!("Geçersiz kısayol: {text}"))
+}
+
+/// An account hotkey: valid, and not the one that opens the window.
+fn check_hotkey(text: &str, window_hotkey: &str) -> Result<Shortcut, String> {
+    let shortcut = parse_hotkey(text)?;
+    if Shortcut::from_str(window_hotkey).is_ok_and(|w| w.id() == shortcut.id()) {
+        return Err("Bu kısayol pencereyi açmak için kullanılıyor.".into());
+    }
+    Ok(shortcut)
+}
+
+fn window_hotkey(app: &AppHandle) -> String {
+    app.state::<Shared>().sw.config().map(|c| c.window_hotkey).unwrap_or_default()
+}
+
+#[tauri::command(async)]
+fn set_window_hotkey(app: AppHandle, hotkey: String) -> CmdResult<()> {
+    parse_hotkey(&hotkey).map_err(other)?;
+    edit(&app, |sw| sw.set_window_hotkey(&hotkey))?;
+    register_hotkeys(&app);
+    Ok(())
 }
 
 /// Drops every registered hotkey and registers the current set. A
@@ -443,13 +464,14 @@ fn register_hotkeys(app: &AppHandle) {
     let shared = app.state::<Shared>();
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
-    if let Ok(toggle) = Shortcut::from_str(TOGGLE_HOTKEY) {
+    let window = window_hotkey(app);
+    if let Ok(toggle) = Shortcut::from_str(&window) {
         let _ = shortcuts.register(toggle);
     }
     let mut map = HashMap::new();
     if let Ok(view) = shared.sw.view() {
         for a in &view.accounts {
-            let Some(shortcut) = a.account.hotkey.as_deref().and_then(|h| check_hotkey(h).ok()) else { continue };
+            let Some(shortcut) = a.account.hotkey.as_deref().and_then(|h| check_hotkey(h, &window).ok()) else { continue };
             if shortcuts.register(shortcut).is_ok() {
                 map.insert(shortcut.id(), a.account.id.clone());
             }
@@ -632,6 +654,7 @@ fn main() {
             set_credentials,
             clear_credentials,
             set_hotkey,
+            set_window_hotkey,
             create_shortcut,
             set_autostart,
             unlock,
@@ -696,26 +719,28 @@ fn main() {
 mod tests {
     use super::*;
 
+    const WINDOW: &str = "Ctrl+Shift+Space";
+
     #[test]
     fn hotkeys_the_window_can_produce_are_accepted() {
-        for ok in ["Ctrl+Alt+Digit1", "Ctrl+Shift+KeyA", "Alt+F5", "Ctrl+Alt+Numpad3", "Ctrl+Alt+Shift+KeyQ"] {
-            assert!(check_hotkey(ok).is_ok(), "{ok}");
+        for ok in ["Ctrl+Alt+Digit1", "Ctrl+Shift+KeyA", "Alt+F5", "Ctrl+Alt+Numpad3", "Ctrl+Alt+Shift+KeyQ", "Ctrl+Shift+Space"] {
+            assert!(parse_hotkey(ok).is_ok(), "{ok}");
         }
-        assert!(Shortcut::from_str(TOGGLE_HOTKEY).is_ok());
     }
 
     #[test]
     fn unsafe_hotkeys_are_refused() {
-        assert!(check_hotkey("KeyA").is_err(), "no modifier");
-        assert!(check_hotkey("Shift+KeyA").is_err(), "shift alone would block typing a capital A");
-        assert!(check_hotkey(TOGGLE_HOTKEY).is_err(), "reserved");
-        assert!(check_hotkey("Ctrl+Alt+NotAKey").is_err());
+        assert!(check_hotkey("KeyA", WINDOW).is_err(), "no modifier");
+        assert!(check_hotkey("Shift+KeyA", WINDOW).is_err(), "shift alone would block typing a capital A");
+        assert!(check_hotkey("Ctrl+Shift+Space", WINDOW).is_err(), "the window's own");
+        assert!(check_hotkey("ctrl+shift+space", WINDOW).is_err(), "the window's own, spelled differently");
+        assert!(check_hotkey("Ctrl+Alt+NotAKey", WINDOW).is_err());
     }
 
     #[test]
     fn distinct_hotkeys_get_distinct_ids() {
-        let a = check_hotkey("Ctrl+Alt+Digit1").unwrap();
-        let b = check_hotkey("Ctrl+Alt+Digit2").unwrap();
+        let a = parse_hotkey("Ctrl+Alt+Digit1").unwrap();
+        let b = parse_hotkey("Ctrl+Alt+Digit2").unwrap();
         assert_ne!(a.id(), b.id());
     }
 

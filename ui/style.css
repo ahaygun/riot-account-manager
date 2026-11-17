@@ -324,3 +324,23 @@ legend { color: var(--mist); font-size: 12px; padding: 0 6px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* ---- settings ---- */
+footer .link { display: inline-flex; align-items: center; gap: 6px; position: relative; }
+.gear { width: 16px; height: 16px; flex: none; }
+#settings:hover .gear { transform: rotate(45deg); }
+.gear { transition: transform .3s var(--ease); }
+/* A small dot on Ayarlar when an update is waiting. */
+.dot-badge { position: absolute; top: 2px; left: 16px; width: 7px; height: 7px; border-radius: 50%; background: var(--brass); box-shadow: 0 0 0 2px var(--ink); }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.muted { color: var(--mist); font-weight: 400; }
+.pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--ink); color: var(--mist); }
+.pill.good { color: var(--mint); }
+.pill.new { color: #2a1e06; background: var(--brass); }
+.nav-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border-radius: 12px; text-align: left; white-space: normal; }
+.nav-row > span:first-child { display: grid; gap: 2px; }
+.nav-row > span:last-child { color: var(--mist); font-size: 18px; }
+/* Inside forms, a switch sits beside its text, and a primary button keeps its colour in cards. */
+.form label.check { display: flex; font-size: 13px; color: var(--paper); }
+.card button.primary { background: var(--brass); }
+.card button.primary:hover { background: #edc276; }

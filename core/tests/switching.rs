@@ -32,6 +32,8 @@ struct Sim {
     league: Option<LeagueInfo>,
     /// The local API says "stay signed in" is off although it is on.
     misreport_persist: bool,
+    /// League client gameflow phase, while it runs.
+    phase: Option<String>,
 }
 
 /// One object plays the processes, the local API and the keyboard, since
@@ -156,6 +158,9 @@ impl ClientApi for World {
     }
     fn league(&self) -> Option<LeagueInfo> {
         self.sim().league.clone()
+    }
+    fn league_phase(&self) -> Option<String> {
+        self.sim().phase.clone()
     }
 }
 
@@ -695,4 +700,37 @@ fn reordering_accounts() {
     assert_eq!(names(&f.sw), ["smurf", "hesap", "ana-hesap"]);
     // The order survives a restart.
     assert_eq!(names(&switcher(f.sw.env.clone(), &f.w)), ["smurf", "hesap", "ana-hesap"]);
+}
+
+#[test]
+fn champion_select_and_queue_block_switching_until_they_end() {
+    let f = fixture("champselect");
+    two_accounts(&f);
+    f.sw.switch("smurf", None).unwrap();
+    f.w.sim().running.push("LeagueClientUx.exe".into());
+    for (phase, blocked) in [("Lobby", false), ("Matchmaking", true), ("ReadyCheck", true), ("ChampSelect", true), ("InProgress", true), ("EndOfGame", false)] {
+        f.w.sim().phase = Some(phase.into());
+        assert_eq!(f.sw.in_game(), blocked, "{phase}");
+    }
+    f.w.sim().phase = Some("ChampSelect".into());
+    let quits = f.w.sim().quits;
+    let err = f.sw.switch("ana-hesap", None).unwrap_err();
+    assert!(matches!(err, Error::InMatchmaking(_)) && err.kind() == "in_game", "offered to switch afterwards");
+    assert!(matches!(f.sw.new_login(), Err(Error::InMatchmaking(_))));
+    assert_eq!(f.w.sim().quits, quits, "the client was not closed");
+    assert!(f.w.live_token().contains("B-1"));
+    // A phase left over from a closed League client is not trusted.
+    f.w.sim().running.retain(|p| p != "LeagueClientUx.exe");
+    assert!(!f.sw.in_game());
+}
+
+#[test]
+fn window_hotkey_cannot_take_an_account_hotkey() {
+    let f = fixture("winhotkey");
+    two_accounts(&f);
+    assert_eq!(f.sw.config().unwrap().window_hotkey, "Ctrl+Shift+Space");
+    f.sw.set_hotkey("smurf", Some("Ctrl+Shift+KeyS")).unwrap();
+    assert!(matches!(f.sw.set_window_hotkey("Ctrl+Shift+KeyS"), Err(Error::HotkeyTaken(_))));
+    f.sw.set_window_hotkey("Ctrl+Shift+KeyQ").unwrap();
+    assert_eq!(f.sw.config().unwrap().window_hotkey, "Ctrl+Shift+KeyQ");
 }

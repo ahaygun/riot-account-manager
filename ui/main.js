@@ -28,7 +28,7 @@ const errorText = (e) => (e && e.message) || String(e);
 const errorKind = (e) => (e && e.kind) || "other";
 
 function show(name) {
-  for (const v of ["list", "edit", "wizard", "unlock", "security"]) $(`view-${v}`).hidden = v !== name;
+  for (const v of ["list", "edit", "wizard", "unlock", "security", "settings"]) $(`view-${v}`).hidden = v !== name;
 }
 
 // ---- the seal ------------------------------------------------------------------
@@ -153,7 +153,8 @@ function render() {
   const queued = view.accounts.find((a) => a.id === view.pending);
   $("queue").hidden = !queued;
   if (queued) $("queue-text").textContent = `Oyun kapanınca "${queued.name}" hesabına geçilecek.`;
-  $("autostart").checked = !!view.autostart;
+  $("settings-dot").hidden = !update.available;
+  $("footer-lock").hidden = !view.security.lock_enabled;
 }
 
 function row(a, i) {
@@ -239,6 +240,7 @@ async function refresh() {
   if (editing) fillEdit();
   if (wizard) wizardTick();
   if (!$("view-security").hidden) fillSecurity();
+  if (!$("view-settings").hidden) fillSettings();
 }
 
 // `game` opens that game this once instead of the account's own.
@@ -400,14 +402,117 @@ $("queue-cancel").addEventListener("click", async () => {
   refresh();
 });
 
-$("autostart").addEventListener("change", async (e) => {
-  try {
-    await invoke("set_autostart", { enabled: e.target.checked });
-  } catch (err) {
-    say(errorText(err), true);
+// ---- hotkey recording ----------------------------------------------------------
+// Turns a key press into a shortcut such as "Ctrl+Shift+Digit1", or explains
+// why it cannot be one. Ctrl+Alt is AltGr on many keyboards (Turkish among
+// them): if the press types a character, a global shortcut would stop that
+// character from being typed anywhere, so it is refused.
+
+function hotkeyFromEvent(e) {
+  if (!/^(Key[A-Z]|Digit\d|Numpad\d|F([1-9]|1[0-2])|Space)$/.test(e.code)) return null; // a modifier alone, or a key we do not offer
+  if (!e.ctrlKey && !e.altKey) return { error: "Kısayolda Ctrl ya da Alt olmalı." };
+  if (e.ctrlKey && e.altKey && e.key && e.key.length === 1) {
+    const plain = e.code.startsWith("Key") ? e.code.slice(3).toLowerCase() : e.code.replace(/^(Digit|Numpad)/, "");
+    if (e.key.toLowerCase() !== plain) {
+      return { error: `Ctrl+Alt+${plain.toUpperCase()} klavyende "${e.key}" yazıyor; kısayol yapılırsa o karakteri yazamazsın. Shift ekle ya da başka bir tuş seç.` };
+    }
   }
-  refresh();
+  const parts = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  parts.push(e.code);
+  return { hotkey: parts.join("+") };
+}
+
+// ---- settings --------------------------------------------------------------------
+
+function setSay(text, isError = false) {
+  $("set-message").className = isError ? "hint error" : "hint";
+  $("set-message").textContent = text;
+}
+
+function fillSettings() {
+  const update = view.update || {};
+  $("set-version").textContent = view.version || "";
+  const pill = $("set-update-state");
+  pill.className = "pill";
+  if (!update.supported) {
+    pill.textContent = "";
+    $("set-update-text").textContent = "Bu sürüm kendini güncelleyemez. Yeni sürümleri deponun Releases sayfasından indirip üstüne kurabilirsin.";
+  } else if (update.available) {
+    pill.textContent = "Yeni sürüm";
+    pill.classList.add("new");
+    $("set-update-text").textContent = `${update.available} hazır. Güncelle'ye basınca indirilir, imzası doğrulanır ve uygulama yeniden açılır.`;
+  } else {
+    pill.textContent = "Güncel";
+    pill.classList.add("good");
+    $("set-update-text").textContent = update.enabled
+      ? "Uygulama açılışta ve birkaç saatte bir yeni sürüme bakar; hiçbir şey sen onaylamadan kurulmaz."
+      : "Kendiliğinden denetim kapalı. İstediğinde aşağıdan denetleyebilirsin.";
+  }
+  $("set-update-actions").hidden = !update.supported;
+  $("set-update-auto-row").hidden = !update.supported;
+  $("set-update-install").hidden = !update.available;
+  $("set-update-auto").checked = !!update.enabled;
+  $("set-autostart").checked = !!view.autostart;
+  if (document.activeElement !== $("set-window-hotkey")) $("set-window-hotkey").value = hotkeyLabel(view.window_hotkey || "");
+  const sec = view.security;
+  $("set-security-text").textContent =
+    `${view.accounts.length} hesap · uygulama kilidi ${sec.lock_enabled ? "açık" : "kapalı"}`;
+}
+
+$("settings").addEventListener("click", () => {
+  setSay("");
+  fillSettings();
+  show("settings");
 });
+$("set-back").addEventListener("click", () => {
+  show("list");
+  $("filter").focus();
+});
+$("set-security").addEventListener("click", () => {
+  secSay("");
+  $("sec-wipe").textContent = "Tüm verileri sil";
+  fillSecurity();
+  show("security");
+});
+
+async function setCall(command, args, okText = "") {
+  try {
+    await invoke(command, args);
+    setSay(okText);
+  } catch (e) {
+    setSay(errorText(e), true);
+  }
+  await refresh();
+}
+
+$("set-autostart").addEventListener("change", (e) => setCall("set_autostart", { enabled: e.target.checked }));
+$("set-update-auto").addEventListener("change", (e) => setCall("set_update_checks", { enabled: e.target.checked }));
+$("set-update-check").addEventListener("click", (e) =>
+  whileWorking(e.currentTarget, async () => {
+    try {
+      const found = await invoke("check_update_now");
+      setSay(found ? "" : "Kurulu sürüm güncel.");
+    } catch (err) {
+      setSay(errorText(err), true);
+    }
+    await refresh();
+  }));
+$("set-update-install").addEventListener("click", () => $("update-install").click());
+
+$("set-window-hotkey").addEventListener("keydown", (e) => {
+  if (e.key === "Tab") return;
+  e.preventDefault();
+  const r = hotkeyFromEvent(e);
+  if (!r) return;
+  if (r.error) return setSay(r.error, true);
+  setCall("set_window_hotkey", { hotkey: r.hotkey }, "Kısayol kaydedildi.").then(() => {
+    if ($("set-message").className === "hint") $("set-window-hotkey").value = hotkeyLabel(r.hotkey);
+  });
+});
+$("set-window-hotkey").addEventListener("blur", fillSettings);
 
 // ---- one account's settings -------------------------------------------------
 
@@ -431,6 +536,11 @@ function fillEdit() {
   $("edit-title").textContent = a.name;
   $("edit-game").value = a.game;
   $("edit-hotkey").value = a.hotkey ? hotkeyLabel(a.hotkey) : "";
+  // Saved by an older version, a plain Ctrl+Alt+key may be AltGr.
+  if (a.hotkey && /^Ctrl\+Alt\+(Key|Digit)/.test(a.hotkey) && !$("edit-message").textContent) {
+    $("edit-message").className = "hint error";
+    $("edit-message").textContent = "Ctrl+Alt ile başlayan kısayollar Türkçe klavyede AltGr ile aynıdır ve #, @, { gibi karakterleri yazmanı engelleyebilir. Kutuya tıklayıp Shift ekleyerek yeniden kaydetmeni öneririm.";
+  }
   $("edit-hotkey-clear").disabled = !a.hotkey;
   $("edit-cred-state").textContent = a.has_password
     ? "Şifre kayıtlı. Oturumun süresi dolarsa otomatik yazılır."
@@ -470,13 +580,14 @@ $("edit-hotkey").addEventListener("keydown", (e) => {
   if (e.key === "Tab") return;
   e.preventDefault();
   if (e.key === "Backspace" || e.key === "Delete") return void editCall("set_hotkey", { hotkey: null });
-  if (!/^(Key[A-Z]|Digit\d|Numpad\d|F([1-9]|1[0-2]))$/.test(e.code)) return; // modifier alone, or a key we do not offer
-  const parts = [];
-  if (e.ctrlKey) parts.push("Ctrl");
-  if (e.altKey) parts.push("Alt");
-  if (e.shiftKey) parts.push("Shift");
-  parts.push(e.code);
-  editCall("set_hotkey", { hotkey: parts.join("+") }, "Kısayol kaydedildi.");
+  const r = hotkeyFromEvent(e);
+  if (!r) return;
+  if (r.error) {
+    $("edit-message").className = "hint error";
+    $("edit-message").textContent = r.error;
+    return;
+  }
+  editCall("set_hotkey", { hotkey: r.hotkey }, "Kısayol kaydedildi.");
 });
 
 $("edit-hotkey-clear").addEventListener("click", () => editCall("set_hotkey", { hotkey: null }));
@@ -699,11 +810,9 @@ function fillSecurity() {
   $("sec-net").textContent = !update.supported
     ? "Uygulama internete bağlanmaz. Yalnızca bu bilgisayardaki Riot Client ile konuşur."
     : update.enabled
-      ? "Uygulamanın tek internet bağlantısı güncelleme denetimidir; aşağıdan kapatabilirsin. Bunun dışında yalnızca bu bilgisayardaki Riot Client ile konuşur."
+      ? "Uygulamanın tek internet bağlantısı güncelleme denetimidir; Ayarlar'dan kapatabilirsin. Bunun dışında yalnızca bu bilgisayardaki Riot Client ile konuşur."
       : "Güncelleme denetimi kapalı: uygulama internete bağlanmaz. Yalnızca bu bilgisayardaki Riot Client ile konuşur.";
-  $("sec-update-card").hidden = !update.supported;
-  $("sec-update-on").checked = !!update.enabled;
-  $("sec-version").textContent = `Kurulu sürüm: ${view.version || ""}`;
+
   $("sec-counts").textContent =
     `${view.accounts.length} hesap, ${sec.saved_sessions} kayıtlı oturum, ${sec.saved_passwords} kayıtlı şifre.`;
   $("sec-path").textContent = sec.data_dir || "";
@@ -733,13 +842,11 @@ async function secCall(command, args, okText, sealText = null) {
   await refresh();
 }
 
-$("security").addEventListener("click", () => {
-  secSay("");
-  $("sec-wipe").textContent = "Tüm verileri sil";
-  fillSecurity();
-  show("security");
+
+$("sec-back").addEventListener("click", () => {
+  fillSettings();
+  show("settings");
 });
-$("sec-back").addEventListener("click", () => show("list"));
 $("sec-open").addEventListener("click", (e) => whileWorking(e.currentTarget, () => secCall("open_data_dir", {}, "")));
 $("sec-enable").addEventListener("click", () => {
   if ($("sec-new").value !== $("sec-new2").value) return secSay("İki şifre aynı değil.", true);
@@ -754,17 +861,6 @@ $("sec-lock-now").addEventListener("click", async () => {
   show("list");
   refresh();
 });
-$("sec-update-on").addEventListener("change", (e) => secCall("set_update_checks", { enabled: e.target.checked }, ""));
-$("sec-update-check").addEventListener("click", (e) =>
-  whileWorking(e.currentTarget, async () => {
-    try {
-      const found = await invoke("check_update_now");
-      secSay(found ? `Yeni sürüm bulundu: ${found}. Ana ekrandan kurabilirsin.` : "Kurulu sürüm güncel.");
-    } catch (err) {
-      secSay(errorText(err), true);
-    }
-    await refresh();
-  }));
 $("update-install").addEventListener("click", (e) =>
   whileWorking(e.currentTarget, async () => {
     say("Güncelleme indiriliyor…");
