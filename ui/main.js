@@ -895,6 +895,8 @@ listen("update-progress", (e) => {
 });
 listen("notice", (e) => {
   const n = e.payload;
+  if (n.kind === "click_riot") return say(n.text);
+  if (n.kind === "click_riot_done") return say("");
   if (["in_game", "locked", "league_unknown"].includes(n.kind) && n.account) reportSwitchError({ kind: n.kind, message: n.text }, n.account);
   else say(n.text, n.error);
 });

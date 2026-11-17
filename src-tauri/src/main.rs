@@ -23,6 +23,29 @@ const UPKEEP_EVERY: u32 = 5;
 const UPDATE_FIRST_TICK: u32 = 4;
 const UPDATE_EVERY: u32 = 6 * 60 * 60 / 3;
 
+/// Set once the app is up; lets core callbacks reach the window.
+static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// Windows would not let us bring Riot Client forward for a typed login:
+/// ask the user to click it, and put the request away afterwards.
+fn ask_for_focus(on: bool) {
+    let Some(app) = APP.get() else { return };
+    if on {
+        show_window(app);
+        let _ = app.emit(
+            "notice",
+            Notice {
+                text: "Riot Client penceresinin başlığına bir kez tıkla; giriş bilgilerini ben yazacağım.".into(),
+                error: false,
+                kind: Some("click_riot".into()),
+                account: None,
+            },
+        );
+    } else {
+        let _ = app.emit("notice", Notice { text: String::new(), error: false, kind: Some("click_riot_done".into()), account: None });
+    }
+}
+
 struct Shared {
     sw: Arc<Switcher>,
     /// Held for anything that closes the client or moves session files, so
@@ -113,7 +136,14 @@ fn watch_login(app: AppHandle, id: String, game: Option<Game>, generation: u64) 
     std::thread::spawn(move || {
         let shared = app.state::<Shared>();
         let cancelled = || shared.generation.load(Ordering::SeqCst) != generation;
-        match shared.sw.await_login(&id, game, &cancelled) {
+        let outcome = shared.sw.await_login(&id, game, &cancelled);
+        shared.sw.log(&format!("switch: sign-in {}", match &outcome {
+            Ok(LoginOutcome::SignedIn) => "accepted".to_string(),
+            Ok(LoginOutcome::NeedsLogin(_)) => "needs a manual sign-in".to_string(),
+            Ok(LoginOutcome::Unknown) => "not confirmed (cancelled or client closed)".to_string(),
+            Err(e) => format!("failed: {}", e.kind()),
+        }));
+        match outcome {
             Ok(LoginOutcome::NeedsLogin(why)) => {
                 changed(&app);
                 notice(&app, why, true);
@@ -601,7 +631,8 @@ fn main() {
 
     let env = Env::from_system();
     let api = Arc::new(LocalApi::new(env.riot_games_dir.clone()));
-    let switcher = Switcher::new(env, Arc::new(SysProcs), api, Arc::new(WindowTyper));
+    let mut switcher = Switcher::new(env, Arc::new(SysProcs), api, Arc::new(WindowTyper));
+    switcher.ask_for_focus = Arc::new(ask_for_focus);
 
     // The updater is only configured in release builds made with a signing
     // key (see .github/workflows/release.yml). Without that configuration
@@ -669,6 +700,7 @@ fn main() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            let _ = APP.set(handle.clone());
 
             let mut tray = TrayIconBuilder::with_id(TRAY_ID)
                 .tooltip("QuickSwitch")

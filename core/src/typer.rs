@@ -11,12 +11,20 @@
 
 use std::path::Path;
 
-/// Which windows may receive the login.
+/// Which windows may receive the login, and how to reach the user.
 pub struct UiTarget<'a> {
     /// Process names that own the login window.
     pub processes: &'a [String],
     /// Riot Client's install folder, when known.
     pub install_dir: Option<&'a Path>,
+    /// Called with `true` when Windows will not let us bring the window
+    /// forward and the user is asked to click it, and with `false` when
+    /// that is over.
+    pub ask_for_focus: &'a dyn Fn(bool),
+    /// Stops waiting for the user's click.
+    pub cancelled: &'a dyn Fn() -> bool,
+    /// One line of diagnostics. Never given the username or password.
+    pub log: &'a dyn Fn(&str),
 }
 
 pub trait LoginTyper: Send + Sync {
@@ -110,7 +118,12 @@ mod win {
         fn GetWindowThreadProcessId(hwnd: Hwnd, pid: *mut u32) -> u32;
         fn GetForegroundWindow() -> Hwnd;
         fn SetForegroundWindow(hwnd: Hwnd) -> i32;
-        fn ShowWindowAsync(hwnd: Hwnd, cmd: i32) -> i32;
+        fn BringWindowToTop(hwnd: Hwnd) -> i32;
+        fn IsIconic(hwnd: Hwnd) -> i32;
+        fn ShowWindow(hwnd: Hwnd, cmd: i32) -> i32;
+        fn SetWindowPos(hwnd: Hwnd, after: Hwnd, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
+        fn SwitchToThisWindow(hwnd: Hwnd, alt_tab: i32);
+        fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
         fn AttachThreadInput(attach: u32, attach_to: u32, attach_flag: i32) -> i32;
         fn SendInput(count: u32, inputs: *const Input, size: i32) -> u32;
     }
@@ -143,9 +156,38 @@ mod win {
             .collect()
     }
 
+    #[repr(C)]
+    #[derive(Default)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmGetWindowAttribute(hwnd: Hwnd, attribute: u32, value: *mut c_void, size: u32) -> i32;
+    }
+
+    const DWMWA_CLOAKED: u32 = 14;
+    const SWP_NOMOVE: u32 = 0x2;
+    const SWP_NOSIZE: u32 = 0x1;
+    const HWND_TOPMOST: isize = -1;
+    const HWND_NOTOPMOST: isize = -2;
+    const VK_MENU: u16 = 0x12;
+
     struct Search {
         pids: Vec<u32>,
-        found: Hwnd,
+        found: Vec<(Hwnd, i64)>,
+    }
+
+    /// Hidden by the compositor although "visible" to older APIs.
+    fn cloaked(hwnd: Hwnd) -> bool {
+        let mut value = 0u32;
+        // SAFETY: `value` is a u32, the size the attribute is defined with.
+        let hr = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut value as *mut u32 as *mut c_void, 4) };
+        hr == 0 && value != 0
     }
 
     unsafe extern "system" fn visit(hwnd: Hwnd, lparam: isize) -> i32 {
@@ -154,52 +196,126 @@ mod win {
         let search = &mut *(lparam as *mut Search);
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, &mut pid);
-        if search.pids.contains(&pid) && IsWindowVisible(hwnd) != 0 && GetWindowTextLengthW(hwnd) > 0 {
-            search.found = hwnd;
-            return 0; // stop
+        if search.pids.contains(&pid) && IsWindowVisible(hwnd) != 0 && GetWindowTextLengthW(hwnd) > 0 && !cloaked(hwnd) {
+            let mut r = Rect::default();
+            GetWindowRect(hwnd, &mut r);
+            let area = i64::from(r.right - r.left) * i64::from(r.bottom - r.top);
+            search.found.push((hwnd, area));
         }
         1
     }
 
-    /// A visible, titled top-level window of one of the UI processes.
+    /// The Riot Client window to sign in through: its largest visible,
+    /// titled, uncloaked top-level window. Riot Client also owns small or
+    /// hidden helper windows, which cannot be brought forward.
     fn find_window(target: &UiTarget) -> Option<Hwnd> {
-        let mut search = Search { pids: ui_pids(target), found: std::ptr::null_mut() };
+        let mut search = Search { pids: ui_pids(target), found: Vec::new() };
         if search.pids.is_empty() {
+            (target.log)("login: no Riot Client UI process found");
             return None;
         }
         // SAFETY: the callback only touches `search`, which lives across the call.
         unsafe { EnumWindows(visit, &mut search as *mut Search as isize) };
-        (!search.found.is_null()).then_some(search.found)
+        (target.log)(&format!("login: {} UI process(es), {} candidate window(s)", search.pids.len(), search.found.len()));
+        search.found.into_iter().filter(|(_, area)| *area > 200 * 200).max_by_key(|(_, area)| *area).map(|(h, _)| h)
     }
 
-    fn foreground_is_riot(target: &UiTarget) -> bool {
+    fn foreground_pid() -> u32 {
         let mut pid = 0u32;
         // SAFETY: plain queries; a null foreground window yields pid 0.
         unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut pid) };
+        pid
+    }
+
+    fn process_name(pid: u32) -> String {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        let Ok(mut sys) = System::new() else { return "?".into() };
+        let pid = Pid::from_u32(pid);
+        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing());
+        sys.process(pid).map(|p| p.name().to_string_lossy().into_owned()).unwrap_or_else(|| "?".into())
+    }
+
+    fn foreground_is_riot(target: &UiTarget) -> bool {
+        let pid = foreground_pid();
         pid != 0 && ui_pids(target).contains(&pid)
     }
 
-    /// Brings the window to the front. Windows normally refuses this from a
-    /// background program; attaching to the foreground thread's input for a
-    /// moment is the documented way around it.
+    fn settled(target: &UiTarget) -> bool {
+        sleep(Duration::from_millis(200));
+        foreground_is_riot(target)
+    }
+
+    /// Brings the window to the front. Windows refuses this to programs in
+    /// the background unless one of several conditions holds, so each
+    /// documented way is tried in turn, from the gentlest.
     fn focus(hwnd: Hwnd, target: &UiTarget) -> bool {
-        for _ in 0..6 {
-            // SAFETY: handles come from the system; calls fail harmlessly on stale ones.
-            unsafe {
+        // SAFETY (all blocks): handles come from the system and the calls
+        // fail harmlessly on a stale one.
+        unsafe {
+            if IsIconic(hwnd) != 0 {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
+        }
+        let steps: [(&str, &dyn Fn()); 5] = [
+            ("direct", &|| unsafe {
+                SetForegroundWindow(hwnd);
+            }),
+            // A program that produced the last input event may take the
+            // foreground: a lone Alt press and release is that event.
+            ("alt", &|| unsafe {
+                send(&[key(VK_MENU, 0, 0), key(VK_MENU, 0, KEYEVENTF_KEYUP)]);
+                SetForegroundWindow(hwnd);
+                BringWindowToTop(hwnd);
+            }),
+            ("attach", &|| unsafe {
                 let mut unused = 0u32;
                 let fg_thread = GetWindowThreadProcessId(GetForegroundWindow(), &mut unused);
                 let me = GetCurrentThreadId();
                 AttachThreadInput(me, fg_thread, 1);
-                ShowWindowAsync(hwnd, SW_RESTORE);
+                BringWindowToTop(hwnd);
                 SetForegroundWindow(hwnd);
                 AttachThreadInput(me, fg_thread, 0);
-            }
-            sleep(Duration::from_millis(250));
-            if foreground_is_riot(target) {
+            }),
+            ("topmost", &|| unsafe {
+                SetWindowPos(hwnd, HWND_TOPMOST as Hwnd, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                SetWindowPos(hwnd, HWND_NOTOPMOST as Hwnd, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                SetForegroundWindow(hwnd);
+            }),
+            ("switch", &|| unsafe {
+                SwitchToThisWindow(hwnd, 1);
+            }),
+        ];
+        for (name, step) in steps {
+            step();
+            if settled(target) {
+                (target.log)(&format!("login: window brought forward ({name})"));
                 return true;
             }
+            (target.log)(&format!("login: '{name}' did not bring it forward; foreground is {}", process_name(foreground_pid())));
         }
         false
+    }
+
+    /// When Windows refuses every way, the user clicks the window: that is
+    /// always allowed. Waits up to 45 seconds.
+    fn wait_for_click(target: &UiTarget) -> bool {
+        (target.ask_for_focus)(true);
+        let start = std::time::Instant::now();
+        let mut ok = false;
+        while start.elapsed() < Duration::from_secs(45) && !(target.cancelled)() {
+            if foreground_is_riot(target) {
+                // Let the click finish before typing.
+                sleep(Duration::from_millis(400));
+                ok = foreground_is_riot(target);
+                if ok {
+                    break;
+                }
+            }
+            sleep(Duration::from_millis(200));
+        }
+        (target.ask_for_focus)(false);
+        (target.log)(if ok { "login: user brought the window forward" } else { "login: gave up waiting for the user's click" });
+        ok
     }
 
     fn send(inputs: &[Input]) {
@@ -223,10 +339,13 @@ mod win {
     }
 
     pub fn type_login(username: &str, password: &str, target: &UiTarget) -> Result<(), String> {
-        let lost = || "Riot Client penceresi öne getirilemedi; şifre yazılmadı.".to_string();
+        let lost = || {
+            (target.log)(&format!("login: lost the window while typing; foreground is {}", process_name(foreground_pid())));
+            "Riot Client penceresi yazarken öne çıkmadı; şifrenin başka bir yere gitmemesi için yazma durduruldu.".to_string()
+        };
         let hwnd = find_window(target).ok_or("Riot Client penceresi bulunamadı.")?;
-        if !focus(hwnd, target) {
-            return Err(lost());
+        if !focus(hwnd, target) && !wait_for_click(target) {
+            return Err("Riot Client penceresi öne getirilemedi; şifre yazılmadı. Riot Client'ta elle giriş yapabilirsin.".into());
         }
         // The login page opens with the username field focused.
         type_text(username);

@@ -267,6 +267,9 @@ pub struct Switcher {
     pub timing: Timing,
     /// Cost of turning a new master password into a key.
     pub kdf: KdfParams,
+    /// Told when the user has to click Riot Client's window for a typed
+    /// login to go on (`true`), and when that is over (`false`).
+    pub ask_for_focus: Arc<dyn Fn(bool) + Send + Sync>,
     vault: Vault,
     /// Serialises read-modify-write of the account list across threads.
     state_lock: Mutex<()>,
@@ -275,7 +278,17 @@ pub struct Switcher {
 impl Switcher {
     pub fn new(env: Env, procs: Arc<dyn Procs>, api: Arc<dyn ClientApi>, typer: Arc<dyn LoginTyper>) -> Self {
         let vault = Vault::new(env.data_dir.join("vault.json"));
-        Switcher { env, procs, api, typer, timing: Timing::default(), kdf: KdfParams::default(), vault, state_lock: Mutex::new(()) }
+        Switcher {
+            env,
+            procs,
+            api,
+            typer,
+            timing: Timing::default(),
+            kdf: KdfParams::default(),
+            ask_for_focus: Arc::new(|_| {}),
+            vault,
+            state_lock: Mutex::new(()),
+        }
     }
 
     // ---- storage -----------------------------------------------------------
@@ -716,7 +729,15 @@ impl Switcher {
             return self.confirm_signed_in(id, game, false, cancelled);
         }
         let exe = self.riot_exe(&cfg).ok();
-        let target = UiTarget { processes: &cfg.ui_processes, install_dir: exe.as_deref().and_then(|e| e.parent()) };
+        let log = |line: &str| self.log(line);
+        let ask = |on: bool| (self.ask_for_focus)(on);
+        let target = UiTarget {
+            processes: &cfg.ui_processes,
+            install_dir: exe.as_deref().and_then(|e| e.parent()),
+            ask_for_focus: &ask,
+            cancelled,
+            log: &log,
+        };
         if let Err(why) = self.typer.type_login(&creds.username, &creds.password, &target) {
             self.set_needs_login(id, true)?;
             return Ok(LoginOutcome::NeedsLogin(why));
@@ -896,6 +917,20 @@ impl Switcher {
         match std::fs::remove_file(self.env.secret_file(id)) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),
+        }
+    }
+
+    /// Appends one line to `quickswitch.log` in the data folder, for
+    /// finding out why something did not work. Lines never hold account
+    /// names, usernames, passwords or tokens. Kept under 256 KB.
+    pub fn log(&self, line: &str) {
+        use std::io::Write;
+        let path = self.env.data_dir.join("quickswitch.log");
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() > 256 * 1024) {
+            let _ = std::fs::rename(&path, path.with_extension("old.log"));
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "{} {line}", now());
         }
     }
 

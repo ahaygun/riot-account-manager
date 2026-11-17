@@ -13,6 +13,7 @@ Her şey `%LOCALAPPDATA%\QuickSwitch\` içinde durur. `Roaming` yerine `Local` s
 | `secrets\*.bin` | Kaydetmeyi seçtiğin kullanıcı adı ve şifreler | DPAPI, kilit açıksa ayrıca ana şifre |
 | `vault.json` | Kilit için tuz, Argon2 ayarları ve doğrulama değeri | Ana şifreyi ya da anahtarı içermez |
 | `config.json` | Dosya ve süreç adları | Gizli veri içermez |
+| `quickswitch.log` | Sorun gidermek için kısa teknik kayıt (örneğin "pencere öne getirildi", "giriş kabul edildi") | Hesap adı, kullanıcı adı, şifre ya da oturum bilgisi içermez; 256 KB'ı geçince yenilenir |
 
 ## Şifreleme
 
