@@ -44,6 +44,8 @@ struct Sim {
     ban: Option<Ban>,
     /// What Riot says once a sign-in has been typed.
     auth_problem: Option<AuthProblem>,
+    /// It was already saying so before anything was typed.
+    auth_problem_is_old: bool,
     /// Windows refuses to start the client: it wants administrator rights.
     elevated: bool,
 }
@@ -161,7 +163,7 @@ impl ClientApi for World {
     }
     fn auth_problem(&self) -> Option<AuthProblem> {
         let s = self.sim();
-        s.auth_problem.filter(|_| !s.typed.is_empty() && s.signed_in.is_none())
+        s.auth_problem.filter(|_| (s.auth_problem_is_old || !s.typed.is_empty()) && s.signed_in.is_none())
     }
     fn quit(&self) -> bool {
         if self.sim().unkillable || self.sim().running.is_empty() {
@@ -1257,6 +1259,39 @@ fn each_reason_a_typed_sign_in_fails_is_told_apart() {
         assert_eq!(f.w.sim().enters_again, 0, "a refused sign-in is not sent again");
         assert!(f.sw.view().unwrap().accounts[0].account.needs_login);
     }
+}
+
+#[test]
+fn a_refusal_left_over_from_an_earlier_attempt_is_not_held_against_this_one() {
+    // The user typed a wrong password by hand a moment ago; Riot still shows
+    // that refusal when the stored, correct password is sent.
+    let f = fixture("auth-stale");
+    {
+        let mut s = f.w.sim();
+        s.accepts = Some(("right".into(), "puuid-P".into()));
+        s.auth_problem = Some(AuthProblem::Rejected);
+        s.auth_problem_is_old = true;
+        s.first_enter_lost = true; // so the sign-in takes a moment to go through
+    }
+    let acc = f.sw.add_with_credentials("Şifreli", "user", "right", Game::Lol).unwrap();
+    f.sw.switch(&acc.id, None).unwrap();
+    assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
+    assert!(!f.sw.view().unwrap().accounts[0].account.needs_login);
+
+    // If it is still refused after this attempt has had its time, it is said.
+    let mut g = fixture("auth-stale-still");
+    // Room to spare, so a coarse system timer cannot run the wait out first.
+    g.sw.timing.login_wait = Duration::from_secs(5);
+    {
+        let mut s = g.w.sim();
+        s.accepts = Some(("right".into(), "puuid-P".into()));
+        s.auth_problem = Some(AuthProblem::Rejected);
+        s.auth_problem_is_old = true;
+    }
+    let acc = g.sw.add_with_credentials("Şifreli", "user", "wrong", Game::Lol).unwrap();
+    g.sw.switch(&acc.id, None).unwrap();
+    let outcome = g.sw.await_login(&acc.id, None, &never).unwrap();
+    assert!(matches!(&outcome, LoginOutcome::NeedsLogin(why) if why.contains("kabul etmedi")), "{outcome:?}");
 }
 
 #[test]

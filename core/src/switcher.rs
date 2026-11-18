@@ -994,6 +994,10 @@ impl Switcher {
             log: &log,
         };
         (self.on_step)("signing_in", id);
+        // What Riot says before anything is sent. A refusal standing here is
+        // left over from an earlier attempt (a wrong password typed by hand
+        // a moment ago, say) and says nothing about the one about to be made.
+        let before = self.api.auth_problem();
         let typed = {
             let _typing = Typing::start(&self.typing_for, id);
             self.typer.type_login(&creds.username, &creds.password, &target)
@@ -1008,8 +1012,19 @@ impl Switcher {
             if cancelled() {
                 return Ok(LoginOutcome::Unknown);
             }
-            // What Riot says about the sign-in decides what happens next.
-            match self.api.auth_problem() {
+            if matches!(self.api.login(), LoginState::SignedIn { .. }) {
+                self.log(&format!(
+                    "switch: typed sign-in accepted after {} ms ({} ms after launch)",
+                    typed_at.elapsed().as_millis(),
+                    start.elapsed().as_millis()
+                ));
+                return self.confirm_signed_in(id, game, true, false, cancelled);
+            }
+            // What Riot says about the sign-in decides what happens next. The
+            // same thing it was already saying before is believed only once
+            // this attempt has had time to replace it.
+            let stale = |p: &AuthProblem| Some(*p) == before && typed_at.elapsed() < t.submit_retry * 2;
+            match self.api.auth_problem().filter(|p| !stale(p)) {
                 // A code is wanted: only the user can give it. The sign-in
                 // by hand that follows is watched for by the caller.
                 Some(AuthProblem::Verification) => {
@@ -1040,14 +1055,6 @@ impl Switcher {
             if !pressed_again && typed_at.elapsed() >= t.submit_retry && self.api.login() == LoginState::SignedOut {
                 pressed_again = true;
                 self.typer.submit_again(&target);
-            }
-            if matches!(self.api.login(), LoginState::SignedIn { .. }) {
-                self.log(&format!(
-                    "switch: typed sign-in accepted after {} ms ({} ms after launch)",
-                    typed_at.elapsed().as_millis(),
-                    start.elapsed().as_millis()
-                ));
-                return self.confirm_signed_in(id, game, true, false, cancelled);
             }
             std::thread::sleep(t.poll);
         }
