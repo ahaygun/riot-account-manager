@@ -14,6 +14,10 @@ Son gözden geçirme: Kasım 2026. Kaynaklar aynı yöntemi kullanan açık kayn
 | Oturum dosyası yeni biçimde hesap kimliğini açıkça taşımaz | Depodaki gözlem (`identity.rs` başlığı); doğrulayan dış kaynak bulunmadı | `identity.rs` `token_account` (ipucu), `switcher.rs` `observe_live` |
 | Giriş durumu `/rso-auth/v1/session`, kimlik `/riot-client-auth/v1/userinfo` (`sub` = hesap kimliği, UUID biçiminde) | Topluluk notları (VALORANT kimlik akışı) | `api.rs` |
 
+| Şifreli girişin neden geçmediği `/rso-authenticator/v1/authentication` ucundan okunur: `type: multifactor` doğrulama kodu, dolu `error` alanı ret (içinde "captcha" ya da "rate" geçiyorsa o) | League Accounts'un kaynak kodu (v3.5.0); biz gerçek istemcide görmedik | `api.rs` `auth_problem_from`, `switcher.rs` `await_login` |
+| League banı kimlik bilgisindeki `ban.restrictions` listesinde durur: `scope: lol`, `type: TIME_BAN` (`dat.expirationMillis`) ya da `PERMANENT_BAN` | League Accounts'un kaynak kodu; biz görmedik | `api.rs` `league_ban` |
+| Riot Client yönetici olarak çalışmaya ayarlıysa başlatma Windows hatası 740 ile reddedilir | Windows davranışı | `switcher.rs` `launch` |
+
 ## Bilinen açık sorular
 
 - Yeni biçimli dosyadaki tokenlardan biri hesabı adlandıran bir JWT mi? Öyleyse `token_account` kapalı istemcinin oturumunu her zaman doğru hesaba yazar. Gerçek bir dosyada denenmedi; ipucu yalnızca bilinen bir hesabı tanımak için kullanılır, hiçbir kaydı engellemez.

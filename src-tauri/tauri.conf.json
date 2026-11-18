@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "QuickSwitch",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "identifier": "app.quickswitch.desktop",
   "build": {
     "frontendDist": "../ui"
@@ -12,9 +12,11 @@
       {
         "label": "main",
         "title": "QuickSwitch",
-        "width": 380,
-        "height": 600,
-        "resizable": false,
+        "width": 1080,
+        "height": 700,
+        "minWidth": 860,
+        "minHeight": 560,
+        "resizable": true,
         "center": true,
         "visible": false
       }

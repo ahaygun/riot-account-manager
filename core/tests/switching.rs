@@ -3,6 +3,7 @@
 //! keyboard.
 
 use quickswitch_core::store::{save_json, Config};
+use quickswitch_core::{AuthProblem, Ban};
 use quickswitch_core::{
     ClientApi, Env, Error, Game, Identity, KdfParams, LeagueInfo, LoginOutcome, LoginState, LoginTyper, Procs, Switcher,
     Timing, UiTarget,
@@ -39,6 +40,12 @@ struct Sim {
     misreport_persist: bool,
     /// League client gameflow phase, while it runs.
     phase: Option<String>,
+    /// What Riot reports about the signed-in account's League ban.
+    ban: Option<Ban>,
+    /// What Riot says once a sign-in has been typed.
+    auth_problem: Option<AuthProblem>,
+    /// Windows refuses to start the client: it wants administrator rights.
+    elevated: bool,
 }
 
 /// One object plays the processes, the local API and the keyboard, since
@@ -127,6 +134,9 @@ impl Procs for World {
         self.sim().running.retain(|r| !names.contains(r));
     }
     fn launch(&self, _exe: &Path, args: &[String]) -> io::Result<()> {
+        if self.sim().elevated {
+            return Err(io::Error::from_raw_os_error(740));
+        }
         self.sim().launches.push(args.to_vec());
         self.boot();
         Ok(())
@@ -147,7 +157,11 @@ impl ClientApi for World {
     fn identity(&self) -> Option<Identity> {
         let s = self.sim();
         let (puuid, _) = s.signed_in.clone()?;
-        Some(Identity { riot_id: Some(format!("{puuid}#TR1")), puuid: Some(puuid) })
+        Some(Identity { riot_id: Some(format!("{puuid}#TR1")), puuid: Some(puuid), ban: s.ban })
+    }
+    fn auth_problem(&self) -> Option<AuthProblem> {
+        let s = self.sim();
+        s.auth_problem.filter(|_| !s.typed.is_empty() && s.signed_in.is_none())
     }
     fn quit(&self) -> bool {
         if self.sim().unkillable || self.sim().running.is_empty() {
@@ -1155,4 +1169,374 @@ fn an_account_id_in_other_letter_case_is_still_the_same_account() {
     assert!(v.accounts[0].has_session, "the saved session was not thrown away");
     assert_eq!(v.active.as_deref(), Some("ana-hesap"));
     assert!(!f.sw.observe_live().unwrap() || f.sw.view().unwrap().active.as_deref() == Some("ana-hesap"));
+}
+
+// ---- bringing accounts over from League Accounts --------------------------------
+
+#[test]
+fn accounts_exported_by_league_accounts_come_in_as_password_accounts() {
+    let f = fixture("import");
+    two_accounts(&f);
+    f.sw.add_with_credentials("Eski", "Already_Here", "pw", Game::Lol).unwrap();
+    // The shape League Accounts writes, with fields we do not use left in.
+    let file = r#"[
+      {"account_id":"user_one","name":"Player One#EUW","riot_id_not_found":false,"region":"EUW1","region_display":"EUW",
+       "password":"hunter2","description":"main","skip_profile_update":false,"tier":"Gold","division":"II","lp":"45","level":"212",
+       "reached_last_season":"N/A","finished_last_season":"N/A","tft":{},"rank_provenance":null,"tft_provenance":null},
+      {"account_id":"  user_two ","name":"","password":"p2","region":"TR1","level":""},
+      {"account_id":"already_here","name":"Dup#TR1","password":"x"},
+      {"account_id":"USER_ONE","name":"Again#EUW","password":"y"},
+      {"account_id":"no_password","name":"Empty#TR1","password":""},
+      {"account_id":"","name":"Nobody#TR1","password":"z"},
+      {"account_id":"user_three","name":"Smurf","password":"p3"}
+    ]"#;
+    let done = f.sw.import_league_accounts(file).unwrap();
+    assert_eq!((done.added, done.already_here, done.incomplete), (3, 2, 2));
+
+    let v = f.sw.view().unwrap();
+    let by_name = |n: &str| v.accounts.iter().find(|a| a.account.name == n).unwrap_or_else(|| panic!("{n}"));
+    let one = by_name("Player One#EUW");
+    assert!(one.has_password && !one.has_session);
+    assert_eq!(one.account.riot_id.as_deref(), Some("Player One#EUW"));
+    assert_eq!(one.account.level, Some(212));
+    assert!(by_name("user_two").has_password, "no Riot ID: shown by its username");
+    assert!(by_name("Smurf (2)").has_password, "a taken name gets a number");
+    assert_eq!(v.accounts.len(), 6);
+
+    // The imported password is the one that gets typed.
+    f.w.sim().accepts = Some(("hunter2".into(), "puuid-O".into()));
+    let id = one.account.id.clone();
+    f.sw.switch(&id, None).unwrap();
+    assert_eq!(f.sw.await_login(&id, None, &never).unwrap(), LoginOutcome::SignedIn);
+    assert_eq!(f.w.sim().typed.last().unwrap(), &("user_one".to_string(), "hunter2".to_string()));
+
+    // Importing the same file again adds nothing.
+    let again = f.sw.import_league_accounts(file).unwrap();
+    assert_eq!((again.added, again.already_here), (0, 5));
+}
+
+#[test]
+fn a_file_that_is_not_an_export_is_refused_and_a_locked_app_imports_nothing() {
+    let f = fixture("import-bad");
+    for bad in ["", "not json", r#"{"account_id":"a","password":"b"}"#, r#"[{"account_id": 5}]"#] {
+        assert!(matches!(f.sw.import_league_accounts(bad), Err(Error::BadImport)), "{bad}");
+    }
+    assert_eq!(f.sw.import_league_accounts("[]").unwrap().added, 0);
+    f.sw.set_lock(None, Some("correct horse")).unwrap();
+    f.sw.lock_now();
+    assert!(matches!(f.sw.import_league_accounts(r#"[{"account_id":"a","password":"b"}]"#), Err(Error::Locked)));
+    assert!(f.sw.unlock("correct horse").unwrap());
+    assert!(f.sw.view().unwrap().accounts.is_empty());
+}
+
+// ---- what Riot says about a sign-in ---------------------------------------------
+
+#[test]
+fn each_reason_a_typed_sign_in_fails_is_told_apart() {
+    for (problem, words) in [
+        (AuthProblem::Rejected, "kabul etmedi"),
+        (AuthProblem::RateLimited, "çok fazla"),
+        (AuthProblem::Captcha, "captcha"),
+        (AuthProblem::Verification, "doğrulama kodu"),
+    ] {
+        let f = fixture(&format!("auth-{problem:?}"));
+        {
+            let mut s = f.w.sim();
+            s.accepts = Some(("right".into(), "puuid-P".into()));
+            s.auth_problem = Some(problem);
+        }
+        let acc = f.sw.add_with_credentials("Şifreli", "user", "wrong", Game::Lol).unwrap();
+        f.sw.switch(&acc.id, None).unwrap();
+        let started = std::time::Instant::now();
+        let outcome = f.sw.await_login(&acc.id, None, &never).unwrap();
+        assert!(matches!(&outcome, LoginOutcome::NeedsLogin(why) if why.contains(words)), "{problem:?}: {outcome:?}");
+        assert!(started.elapsed() < Duration::from_millis(140), "said at once, not after the wait runs out");
+        assert_eq!(f.w.sim().enters_again, 0, "a refused sign-in is not sent again");
+        assert!(f.sw.view().unwrap().accounts[0].account.needs_login);
+    }
+}
+
+#[test]
+fn a_verification_code_entered_by_hand_finishes_the_sign_in() {
+    let f = fixture("auth-code");
+    {
+        let mut s = f.w.sim();
+        s.accepts = Some(("right".into(), "puuid-P".into()));
+        s.auth_problem = Some(AuthProblem::Verification);
+    }
+    let acc = f.sw.add_with_credentials("Şifreli", "user", "wrong", Game::Lol).unwrap();
+    f.sw.switch(&acc.id, None).unwrap();
+    assert!(matches!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::NeedsLogin(_)));
+    // The user types the code in Riot Client.
+    f.w.sim().signed_in = Some(("puuid-P".into(), "P-1".into()));
+    assert_eq!(f.sw.await_manual_login(&acc.id, &never).unwrap(), LoginOutcome::SignedIn);
+    assert!(!f.sw.view().unwrap().accounts[0].account.needs_login);
+}
+
+#[test]
+fn a_client_that_wants_administrator_rights_is_named_as_that() {
+    let f = fixture("elevated");
+    two_accounts(&f);
+    f.w.sim().elevated = true;
+    let e = f.sw.switch("ana-hesap", None).unwrap_err();
+    assert_eq!(e.kind(), "riot_elevated");
+    assert!(e.to_string().contains("yönetici"));
+}
+
+#[test]
+fn a_switch_says_what_it_is_doing() {
+    let mut f = fixture("steps");
+    two_accounts(&f);
+    f.sw.set_credentials("ana-hesap", "u", "p").unwrap();
+    let steps = Arc::new(Mutex::new(Vec::new()));
+    let sink = steps.clone();
+    // Every step names the account it is for; kept as "step@account".
+    f.sw.on_step = Arc::new(move |step, id| sink.lock().unwrap().push(format!("{step}@{id}")));
+    let seen = || std::mem::take(&mut *steps.lock().unwrap());
+    let ana = |list: &[&str]| list.iter().map(|s| format!("{s}@ana-hesap")).collect::<Vec<_>>();
+    f.sw.switch("ana-hesap", None).unwrap();
+    f.sw.await_login("ana-hesap", None, &never).unwrap();
+    assert_eq!(seen(), ana(&["closing", "restoring", "starting", "waiting", "game"]));
+
+    // Asking for the account that is already open only starts the game.
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert_eq!(seen(), ana(&["game"]));
+
+    // An expired session with a stored password adds the sign-in step.
+    f.sw.switch("smurf", None).unwrap();
+    f.w.renew("expired-A");
+    f.w.sim().accepts = Some(("p".into(), "puuid-A".into()));
+    f.sw.switch("ana-hesap", None).unwrap();
+    f.w.stop(false);
+    f.w.write_session("expired-A");
+    f.w.boot();
+    seen();
+    f.sw.await_login("ana-hesap", None, &never).unwrap();
+    assert_eq!(seen(), ana(&["waiting", "signing_in", "game"]));
+}
+
+// ---- bans -----------------------------------------------------------------------
+
+#[test]
+fn a_league_ban_is_kept_with_the_account_and_dropped_when_riot_stops_reporting_it() {
+    let f = fixture("ban");
+    two_accounts(&f);
+    let ban = Ban { until: Some(1_900_000_000_000) };
+    f.sw.switch("ana-hesap", None).unwrap();
+    f.w.sim().ban = Some(ban);
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn, "a ban does not stop the sign-in");
+    let v = f.sw.view().unwrap();
+    assert_eq!(v.accounts[0].account.ban, Some(ban));
+    assert_eq!(v.accounts[1].account.ban, None, "only on the account it belongs to");
+
+    // Still shown while another account is in use.
+    f.w.sim().ban = None;
+    f.sw.switch("smurf", None).unwrap();
+    f.sw.await_login("smurf", None, &never).unwrap();
+    assert_eq!(f.sw.view().unwrap().accounts[0].account.ban, Some(ban));
+
+    // Back on it with the ban lifted.
+    f.sw.switch("ana-hesap", None).unwrap();
+    f.sw.await_login("ana-hesap", None, &never).unwrap();
+    assert_eq!(f.sw.view().unwrap().accounts[0].account.ban, None);
+}
+
+// ---- notes ----------------------------------------------------------------------
+
+#[test]
+fn a_note_is_kept_tidy_and_short() {
+    let f = fixture("note");
+    two_accounts(&f);
+    f.sw.set_note("smurf", "  duo   için\n ayrılan hesap ").unwrap();
+    assert_eq!(f.sw.view().unwrap().accounts[1].account.note, "duo için ayrılan hesap");
+    f.sw.set_note("smurf", &"ş".repeat(500)).unwrap();
+    assert_eq!(f.sw.view().unwrap().accounts[1].account.note.chars().count(), 200);
+    f.sw.set_note("smurf", "").unwrap();
+    assert!(f.sw.view().unwrap().accounts[1].account.note.is_empty());
+    assert!(matches!(f.sw.set_note("yok", "x"), Err(Error::UnknownAccount(_))));
+}
+
+// ---- pasted lists ---------------------------------------------------------------
+
+#[test]
+fn pasted_lines_are_previewed_then_added() {
+    let f = fixture("bulk");
+    f.sw.add_with_credentials("Eski", "old_user", "pw", Game::Lol).unwrap();
+    let lines = "
+        user1--Player One#EUW--pass--with--dashes
+        user2--plainpass
+
+        OLD_USER--x
+        user1--again
+        just-a-name
+        --nopassuser
+        user3--Name#TR1--
+    ";
+    let preview = f.sw.bulk_add(lines, true).unwrap();
+    assert_eq!((preview.added, preview.already_here, preview.incomplete), (2, 2, 3));
+    assert_eq!(f.sw.view().unwrap().accounts.len(), 1, "a preview adds nothing");
+
+    let done = f.sw.bulk_add(lines, false).unwrap();
+    assert_eq!(done, preview, "the preview told the truth");
+    let v = f.sw.view().unwrap();
+    assert_eq!(v.accounts.iter().map(|a| a.account.name.as_str()).collect::<Vec<_>>(), ["Eski", "Player One#EUW", "user2"]);
+
+    // The password is everything after the last separator that belongs to it.
+    f.w.sim().accepts = Some(("pass--with--dashes".into(), "puuid-O".into()));
+    let id = v.accounts[1].account.id.clone();
+    f.sw.switch(&id, None).unwrap();
+    assert_eq!(f.sw.await_login(&id, None, &never).unwrap(), LoginOutcome::SignedIn);
+}
+
+// ---- backups --------------------------------------------------------------------
+
+#[test]
+fn an_encrypted_backup_brings_everything_but_the_sessions_to_another_computer() {
+    let a = fixture("backup-from");
+    two_accounts(&a);
+    a.sw.set_credentials("ana-hesap", "ana_user", "s3cret-pw").unwrap();
+    a.sw.set_note("ana-hesap", "ana hesabım").unwrap();
+    a.sw.set_hotkey("smurf", Some("Ctrl+Shift+Digit2")).unwrap();
+    a.sw.add_with_credentials("Şifreli", "pw_user", "hunter2-pw", Game::Valorant).unwrap();
+
+    assert!(matches!(a.sw.export_backup(None, "short"), Err(Error::WeakBackupPassword)));
+    let file = a.sw.export_backup(None, "yedek parolası").unwrap();
+    for secret in ["s3cret-pw", "hunter2-pw", "ana_user", "pw_user", "Ana Hesap", "puuid-A"] {
+        assert!(!file.contains(secret), "{secret} is readable in the backup");
+    }
+
+    let b = fixture("backup-to");
+    assert!(matches!(b.sw.import_backup("not a backup", "x", false), Err(Error::BadBackup)));
+    assert!(matches!(b.sw.import_backup(&file, "yanlış parola", false), Err(Error::BackupNotOpened)));
+    let mut damaged = file.clone();
+    let at = damaged.rfind("\"data\":\"").unwrap() + 40;
+    damaged.replace_range(at..at + 1, if &damaged[at..at + 1] == "0" { "1" } else { "0" });
+    assert!(matches!(b.sw.import_backup(&damaged, "yedek parolası", false), Err(Error::BackupNotOpened)));
+
+    let preview = b.sw.import_backup(&file, "yedek parolası", true).unwrap();
+    assert_eq!((preview.added, preview.already_here), (3, 0));
+    assert!(b.sw.view().unwrap().accounts.is_empty());
+    assert_eq!(b.sw.import_backup(&file, "yedek parolası", false).unwrap(), preview);
+
+    let v = b.sw.view().unwrap();
+    let get = |name: &str| v.accounts.iter().find(|x| x.account.name == name).unwrap();
+    let ana = get("Ana Hesap");
+    assert!(ana.has_password && !ana.has_session, "the password came, the session did not");
+    assert_eq!(ana.account.note, "ana hesabım");
+    assert_eq!(ana.account.puuid.as_deref(), Some("puuid-A"));
+    let smurf = get("Smurf");
+    assert!(!smurf.has_password && !smurf.has_session && smurf.account.needs_login, "nothing to sign in with yet");
+    assert_eq!(smurf.account.hotkey.as_deref(), Some("Ctrl+Shift+Digit2"));
+    assert_eq!(get("Şifreli").account.game, Game::Valorant);
+
+    // The restored password works, and a second restore adds nothing.
+    b.w.sim().accepts = Some(("s3cret-pw".into(), "puuid-A".into()));
+    let id = ana.account.id.clone();
+    b.sw.switch(&id, None).unwrap();
+    assert_eq!(b.sw.await_login(&id, None, &never).unwrap(), LoginOutcome::SignedIn);
+    let again = b.sw.import_backup(&file, "yedek parolası", false).unwrap();
+    assert_eq!((again.added, again.already_here), (0, 3));
+}
+
+#[test]
+fn a_plain_export_is_what_league_accounts_reads_and_what_we_read_back() {
+    let a = fixture("plain-from");
+    two_accounts(&a); // session-only accounts: nothing to export for them
+    assert!(matches!(a.sw.export_plain(None, "tr"), Err(Error::NothingToExport)));
+    a.sw.import_league_accounts(r#"[{"account_id":"user_one","name":"One#EUW","region":"EUW","password":"p1","description":"main","level":"30"}]"#).unwrap();
+    a.sw.add_with_credentials("İkinci", "user_two", "p2", Game::Lol).unwrap();
+
+    let file = a.sw.export_plain(None, "TR").unwrap();
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&file).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["account_id"], "user_one");
+    assert_eq!(entries[0]["password"], "p1");
+    assert_eq!(entries[0]["name"], "One#EUW");
+    assert_eq!(entries[0]["region"], "euw", "the region it came with");
+    assert_eq!(entries[0]["description"], "main");
+    assert_eq!(entries[1]["region"], "tr", "the one chosen for accounts without");
+
+    let b = fixture("plain-to");
+    assert_eq!(b.sw.import_league_accounts(&file).unwrap().added, 2);
+}
+
+#[test]
+fn with_the_app_lock_on_passwords_leave_only_with_the_master_password() {
+    let f = fixture("leave");
+    let acc = f.sw.add_with_credentials("Şifreli", "user", "hunter2-pw", Game::Lol).unwrap();
+    assert_eq!(f.sw.password_for_clipboard(&acc.id, None).unwrap().as_str(), "hunter2-pw", "no lock: the confirmation is the caller's");
+    f.sw.set_lock(None, Some("correct horse")).unwrap();
+    // Unlocked and in use, yet each way out asks again.
+    for wrong in [None, Some(""), Some("not it")] {
+        assert!(matches!(f.sw.password_for_clipboard(&acc.id, wrong), Err(Error::WrongPassword)));
+        assert!(matches!(f.sw.export_plain(wrong, "tr"), Err(Error::WrongPassword)));
+        assert!(matches!(f.sw.export_backup(wrong, "yedek parolası"), Err(Error::WrongPassword)));
+    }
+    assert_eq!(f.sw.password_for_clipboard(&acc.id, Some("correct horse")).unwrap().as_str(), "hunter2-pw");
+    assert!(f.sw.export_plain(Some("correct horse"), "tr").is_ok());
+    assert!(f.sw.export_backup(Some("correct horse"), "yedek parolası").is_ok());
+    f.sw.lock_now();
+    assert!(matches!(f.sw.password_for_clipboard(&acc.id, Some("correct horse")), Err(Error::Locked)));
+    let two = fixture("leave-none");
+    two_accounts(&two);
+    assert!(matches!(two.sw.password_for_clipboard("smurf", None), Err(Error::EmptyField(_))), "no password stored");
+}
+
+// ---- the log --------------------------------------------------------------------
+
+#[test]
+fn nothing_that_identifies_an_account_reaches_the_log() {
+    let f = fixture("log-privacy");
+    // Every value that must stay out, made easy to find.
+    let (name, user, pass, puuid, token) = ("GizliHesapAdı", "gizli_kullanici", "Gizli-Sifre-123", "puuid-G", "G-gizli-token");
+    f.w.sign_in_by_hand(puuid, token, true);
+    f.sw.capture_new(name, Game::Lol).unwrap();
+    let id = f.sw.view().unwrap().accounts[0].account.id.clone();
+    f.sw.set_credentials(&id, user, pass).unwrap();
+    f.sw.set_note(&id, "GizliNot").unwrap();
+    f.sw.bulk_add("gizli_toplu--GizliRiot#TR1--Gizli-Toplu-Sifre", false).unwrap();
+    f.sw.import_league_accounts(r#"[{"account_id":"gizli_ice","name":"Gizliİçe#TR1","password":"Gizli-Ice-Sifre"}]"#).unwrap();
+    let backup = f.sw.export_backup(None, "Gizli-Yedek-Parolasi").unwrap();
+    f.sw.import_backup(&backup, "Gizli-Yedek-Parolasi", false).unwrap();
+    f.sw.export_plain(None, "tr").unwrap();
+    f.sw.password_for_clipboard(&id, None).unwrap();
+
+    // A session that works, one that expired and is typed, a refusal, a lock.
+    f.sw.new_login().unwrap();
+    f.sw.switch(&id, None).unwrap();
+    f.sw.await_login(&id, None, &never).unwrap();
+    f.w.stop(false);
+    f.w.write_session("expired-G");
+    f.w.boot();
+    f.w.sim().accepts = Some((pass.into(), puuid.into()));
+    f.sw.await_login(&id, None, &never).unwrap();
+    f.sw.new_login().unwrap();
+    f.w.sim().auth_problem = Some(AuthProblem::Rejected);
+    f.w.sim().accepts = Some(("başka".into(), puuid.into()));
+    f.sw.switch(&id, None).unwrap();
+    f.sw.await_login(&id, None, &never).unwrap();
+    f.sw.set_lock(None, Some("Gizli-Ana-Sifre")).unwrap();
+    f.sw.auto_lock_if_idle(Duration::from_secs(86_400));
+    f.sw.unlock("Gizli-Ana-Sifre").unwrap();
+
+    let log = fs::read_to_string(f.root.join("data").join("quickswitch.log")).unwrap();
+    assert!(log.lines().count() > 10, "the flows above do write to the log");
+    let lower = log.to_lowercase();
+    for secret in ["gizli", "puuid-g", "expired-g", &id] {
+        assert!(!lower.contains(&secret.to_lowercase()), "the log holds {secret:?}:\n{log}");
+    }
+}
+
+#[test]
+fn the_end_of_the_log_can_be_read_back_whole_lines_only() {
+    let f = fixture("log-tail");
+    assert_eq!(f.sw.log_tail(1000), "", "no log yet");
+    for i in 0..50 {
+        f.sw.log(&format!("line number {i}"));
+    }
+    let all = f.sw.log_tail(1_000_000);
+    assert_eq!(all.lines().count(), 50);
+    let tail = f.sw.log_tail(200);
+    assert!(tail.len() <= 200 && tail.ends_with("line number 49\n"));
+    assert!(tail.lines().all(|l| l.split(' ').next().unwrap().parse::<u64>().is_ok()), "every line starts with its time: {tail}");
 }

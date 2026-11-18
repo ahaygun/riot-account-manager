@@ -6,6 +6,7 @@
 //! the client again.
 
 pub mod api;
+pub mod clipboard;
 pub mod dpapi;
 pub mod identity;
 pub mod procs;
@@ -19,6 +20,8 @@ pub mod vault;
 pub use api::{ClientApi, Identity, LeagueInfo, LocalApi, LoginState};
 pub use procs::{Procs, SysProcs};
 pub use store::{Account, Config, Env, Game};
-pub use switcher::{Error, LoginOutcome, Switcher, Timing, View};
+pub use switcher::{Error, Imported, LoginOutcome, Switcher, Timing, View};
+pub use store::Ban;
+pub use api::AuthProblem;
 pub use typer::{LoginTyper, UiTarget, WindowTyper};
 pub use vault::KdfParams;

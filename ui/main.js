@@ -1,6 +1,6 @@
-// Window logic. All real work happens in Rust; this file draws three views
-// (account list, one account's settings, the add-account wizard) and
-// forwards what the user does.
+// Window logic. All real work happens in Rust; this file draws the views
+// (the accounts, one account's settings, the add-account wizard, the pages
+// the rail leads to) and forwards what the user does.
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -27,8 +27,18 @@ try { gameFilter = localStorage.getItem("gameFilter") || "all"; } catch {}
 const errorText = (e) => (e && e.message) || String(e);
 const errorKind = (e) => (e && e.kind) || "other";
 
+const VIEWS = ["list", "edit", "wizard", "unlock", "security", "settings", "data", "log"];
+// The rail marks the page that is open; an account's settings, the wizard
+// and the unlock prompt all belong to the accounts.
+const RAIL_HOME = { edit: "list", wizard: "list", unlock: "list" };
+
 function show(name) {
-  for (const v of ["list", "edit", "wizard", "unlock", "security", "settings"]) $(`view-${v}`).hidden = v !== name;
+  for (const v of VIEWS) $(`view-${v}`).hidden = v !== name;
+  const home = RAIL_HOME[name] || name;
+  for (const b of document.querySelectorAll("#rail .nav")) {
+    if (b.dataset.view === home) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  }
 }
 
 // ---- the seal ------------------------------------------------------------------
@@ -74,11 +84,118 @@ async function whileWorking(button, work) {
 
 const plays = (a, game) => game === "all" || a.game === game || a.game === "both";
 
+// ---- order and density ---------------------------------------------------------
+// Both are this window's own taste, kept in the browser's storage.
+
+const TIERS = ["iron", "bronze", "silver", "gold", "platinum", "emerald", "diamond", "master", "grandmaster", "challenger"];
+const DIVISIONS = { IV: 0, III: 1, II: 2, I: 3 };
+
+// "Gold II 45 LP" as a number that grows with the rank; -1 without one.
+function rankValue(rank) {
+  if (!rank) return -1;
+  const parts = rank.split(" ");
+  const tier = TIERS.indexOf(parts[0].toLowerCase());
+  if (tier < 0) return -1;
+  const division = DIVISIONS[parts[1]] ?? 0;
+  const lp = Number(parts[parts.length - 2]) || 0;
+  return tier * 100000 + division * 10000 + Math.min(lp, 9999);
+}
+
+const SORTS = {
+  name: (a, b) => a.name.localeCompare(b.name, "tr"),
+  rank: (a, b) => rankValue(b.rank) - rankValue(a.rank),
+  level: (a, b) => (b.level || 0) - (a.level || 0),
+  recent: (a, b) => Math.max(b.last_ok || 0, b.updated || 0) - Math.max(a.last_ok || 0, a.updated || 0),
+};
+
+let sortBy = "manual";
+let layout = "cards";   // "cards" or "rows"
+let statusFilter = "all"; // "all", "open", "attention", "banned" or "stale"
+try {
+  if (localStorage.getItem("sortBy") in SORTS) sortBy = localStorage.getItem("sortBy");
+  if (localStorage.getItem("layout") === "rows") layout = "rows";
+} catch {}
+
+function renderTools() {
+  $("sort").value = sortBy;
+  for (const b of $("layout").children) b.setAttribute("aria-checked", String(b.dataset.layout === layout));
+  $("accounts").className = [layout, ...["arriving", "reordering"].filter((c) => $("accounts").classList.contains(c))].join(" ");
+}
+
+$("sort").addEventListener("change", (e) => {
+  sortBy = e.target.value;
+  try { localStorage.setItem("sortBy", sortBy); } catch {}
+  selected = 0;
+  render();
+});
+$("layout").addEventListener("click", (e) => {
+  const button = e.target.closest("button");
+  if (!button) return;
+  layout = button.dataset.layout;
+  try { localStorage.setItem("layout", layout); } catch {}
+  render();
+});
+
+// ---- what needs a look ---------------------------------------------------------
+// The rail counts the accounts by state; each count filters the list to it.
+
+const STATUS = {
+  all: { label: "Hepsi", test: () => true },
+  open: { label: "Açık", test: (a) => a.id === view.active },
+  attention: { label: "Giriş gerekli", test: (a) => a.needs_login },
+  banned: { label: "Banlı", test: (a) => !!banText(a.ban) },
+  stale: { label: "Uzun süredir açılmadı", test: (a) => a.stale },
+};
+
+function renderStatus() {
+  const counts = Object.fromEntries(Object.entries(STATUS).map(([key, s]) => [key, view.accounts.filter(s.test).length]));
+  // Only states some account is in are worth a line; "Hepsi" comes with them.
+  const shown = Object.keys(STATUS).filter((key) => key !== "all" && key !== "open" && counts[key]);
+  if (!shown.includes(statusFilter)) statusFilter = "all";
+  $("status").hidden = !shown.length;
+  $("status").replaceChildren(...["all", ...shown].map((key) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("role", "radio");
+    b.dataset.status = key;
+    b.setAttribute("aria-checked", String(key === statusFilter));
+    const label = document.createElement("span");
+    label.textContent = STATUS[key].label;
+    const count = document.createElement("b");
+    count.textContent = counts[key];
+    b.append(label, count);
+    return b;
+  }));
+  $("nav-count").textContent = view.accounts.length || "";
+}
+
+$("status").addEventListener("click", (e) => {
+  const button = e.target.closest("button");
+  if (!button) return;
+  statusFilter = button.dataset.status;
+  selected = 0;
+  show("list");
+  render();
+});
+
 function visibleAccounts() {
   const q = $("filter").value.trim().toLocaleLowerCase("tr");
-  return view.accounts.filter(
-    (a) => plays(a, gameFilter) && `${a.name} ${a.riot_id || ""}`.toLocaleLowerCase("tr").includes(q),
+  const shown = view.accounts.filter(
+    (a) => plays(a, gameFilter) && STATUS[statusFilter].test(a)
+      && `${a.name} ${a.riot_id || ""} ${a.note || ""}`.toLocaleLowerCase("tr").includes(q),
   );
+  // The stored order is the user's own; any other is only a way of looking.
+  return sortBy in SORTS ? shown.sort(SORTS[sortBy]) : shown;
+}
+
+// A League ban that is still running, as words; "" when there is none.
+function banText(ban) {
+  if (!ban) return "";
+  if (ban.until == null) return "kalıcı ban";
+  const left = ban.until - Date.now();
+  if (left <= 0) return "";
+  const hours = Math.ceil(left / 3600000);
+  return hours >= 48 ? `ban: ${Math.ceil(hours / 24)} gün` : hours > 1 ? `ban: ${hours} saat` : "ban: 1 saatten az";
 }
 
 // The game an account opens from its row: with a game filter on, an
@@ -107,7 +224,12 @@ $("games").addEventListener("click", (e) => {
 });
 
 // `action` is an optional { label, run } shown as a button beside the text.
+let sayTimer = null;
 function say(text, isError = false, action = null) {
+  clearTimeout(sayTimer);
+  // Something merely said goes away by itself; an error or a question
+  // stays until it is answered or clicked away.
+  if (text && !isError && !action) sayTimer = setTimeout(() => say(""), 6000);
   $("message").hidden = !text;
   $("message").classList.toggle("error", isError);
   $("message-text").textContent = text || "";
@@ -119,30 +241,27 @@ function say(text, isError = false, action = null) {
   }
 }
 
+$("message-text").addEventListener("click", () => say(""));
+
 function hotkeyLabel(hotkey) {
   return hotkey.replace(/Key|Digit/g, "").replace("Numpad", "Num ");
 }
 
 function render() {
   renderGameFilter();
+  renderStatus();
+  renderTools();
   const accounts = visibleAccounts();
   selected = Math.min(selected, Math.max(accounts.length - 1, 0));
   const rows = accounts.map((a, i) => row(a, i));
-  if (!rows.length) {
-    const empty = document.createElement("li");
-    empty.className = "empty";
-    empty.textContent = !view.accounts.length ? "Henüz hesap yok. \"Hesap ekle\" ile başla."
-      : $("filter").value.trim() ? "Eşleşen hesap yok."
-      : `Bu listede ${gameFilter === "lol" ? "League" : "VALORANT"} oynayan hesap yok.`;
-    rows.push(empty);
-  }
-  // Rows animate in only when the set of accounts changes, not on the
+  if (!rows.length) rows.push(emptyState());
+  // Accounts animate in only when the set of them changes, not on the
   // periodic refresh.
   const ids = view.accounts.map((a) => a.id).sort().join("|");
   $("accounts").classList.toggle("arriving", ids !== shownIds);
   shownIds = ids;
   $("accounts").replaceChildren(...rows);
-  $("footer-lock").classList.toggle("closed", !!view.security.lock_enabled);
+  $("tools").hidden = view.accounts.length < 2;
 
   const update = view.update || {};
   $("update").hidden = !update.available;
@@ -154,7 +273,85 @@ function render() {
   $("queue").hidden = !queued;
   if (queued) $("queue-text").textContent = `Oyun kapanınca "${queued.name}" hesabına geçilecek.`;
   $("settings-dot").hidden = !update.available;
-  $("footer-lock").hidden = !view.security.lock_enabled;
+
+  // The rail's foot: the lock, as a button that does the obvious thing.
+  $("rail-lock").hidden = !view.security.lock_enabled;
+  $("footer-lock").classList.toggle("closed", isLocked);
+  $("rail-lock-text").textContent = isLocked ? "Kilitli: aç" : "Kilit açık: kilitle";
+  $("rail-version").textContent = view.version ? `Sürüm ${view.version}` : "";
+}
+
+// What the accounts area says when it has nothing to show, and what to do.
+function emptyState() {
+  const li = document.createElement("li");
+  li.className = "empty";
+  const title = document.createElement("b");
+  const text = document.createElement("span");
+  if (!view.accounts.length) {
+    title.textContent = "Henüz hesap yok";
+    text.textContent = "\"Hesap ekle\" ile ilk hesabını ekle. Çok hesabın varsa Taşı ve yedekle altından topluca ekleyebilirsin.";
+  } else if ($("filter").value.trim()) {
+    title.textContent = "Eşleşen hesap yok";
+    text.textContent = "Aramayı değiştir ya da temizle.";
+  } else if (statusFilter !== "all") {
+    title.textContent = "Bu durumda hesap yok";
+    text.textContent = "Soldan \"Hepsi\"ni seçerek bütün hesapları gör.";
+  } else {
+    title.textContent = `${gameFilter === "lol" ? "League" : "VALORANT"} oynayan hesap yok`;
+    text.textContent = "Üstten \"Tümü\"nü seç.";
+  }
+  li.append(title, text);
+  return li;
+}
+
+$("rail-lock").addEventListener("click", async () => {
+  if (view.security.lock_enabled && !view.security.unlocked) return openUnlock(null);
+  await withSeal("close", "Kilitleniyor…", "Kilitlendi", () => invoke("lock_now"));
+  show("list");
+  refresh();
+});
+
+// "Gold II 45 LP" in its parts; null without a rank.
+function rankParts(rank) {
+  if (!rank) return null;
+  const words = rank.split(" ");
+  const tier = words[0];
+  if (!TIERS.includes(tier.toLowerCase())) return null;
+  const division = words[1] in DIVISIONS ? words[1] : "";
+  const lp = Number(words[words.length - 2]) || 0;
+  return { tier, division, lp };
+}
+
+const SVG = "http://www.w3.org/2000/svg";
+
+// The crest: a hexagon in the tier's colour, the division inside it. Above
+// Diamond there are no divisions; a small mark takes their place.
+function crest(parts) {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("viewBox", "0 0 40 44");
+  svg.setAttribute("class", "crest");
+  svg.setAttribute("aria-hidden", "true");
+  const hex = document.createElementNS(SVG, "path");
+  hex.setAttribute("class", "hex");
+  hex.setAttribute("d", "M20 2.5 36 11.75v20.5L20 41.5 4 32.25v-20.5z");
+  hex.setAttribute("stroke-width", parts ? "2" : "1.5");
+  hex.setAttribute("stroke-linejoin", "round");
+  if (!parts) hex.setAttribute("stroke-dasharray", "3 4");
+  svg.append(hex);
+  if (parts && parts.division) {
+    const text = document.createElementNS(SVG, "text");
+    text.setAttribute("x", "20");
+    text.setAttribute("y", "26.5");
+    text.setAttribute("text-anchor", "middle");
+    text.textContent = parts.division;
+    svg.append(text);
+  } else if (parts) {
+    const mark = document.createElementNS(SVG, "path");
+    mark.setAttribute("d", "M20 14l2.4 5.2 5.6.6-4.2 3.8 1.2 5.6L20 26.4l-5 2.8 1.2-5.6-4.2-3.8 5.6-.6z");
+    mark.setAttribute("fill", "currentColor");
+    svg.append(mark);
+  }
+  return svg;
 }
 
 function row(a, i) {
@@ -163,9 +360,12 @@ function row(a, i) {
   li.dataset.id = a.id;
   li.style.setProperty("--i", i);
   li.addEventListener("pointerdown", (e) => startDrag(e, li));
-  li.classList.toggle("active", a.id === view.active);
+  const active = a.id === view.active;
+  li.classList.toggle("active", active);
   li.classList.toggle("selected", i === selected);
   li.classList.toggle("busy", a.id === busy);
+  const rank = rankParts(a.rank);
+  if (rank) li.dataset.tier = rank.tier.toLowerCase();
 
   const go = document.createElement("button");
   go.type = "button";
@@ -173,13 +373,23 @@ function row(a, i) {
   go.disabled = busy !== null;
   go.addEventListener("click", () => switchTo(a, rowGame(a)));
 
+  // Who it is: the name with what needs saying about it, the Riot ID under it.
   const name = document.createElement("span");
   name.className = "name";
   const label = document.createElement("span");
   label.textContent = a.name;
   name.append(label);
+  const ban = banText(a.ban);
+  if (ban) {
+    const t = tag(ban, true);
+    t.title = a.ban.until == null
+      ? "Riot bu hesap için kalıcı League banı bildirdi. Oyun açılırsa bağlantı kesilir."
+      : `Riot bu hesap için League banı bildirdi; ${new Date(a.ban.until).toLocaleString("tr")} tarihinde bitiyor. O zamana kadar oyun açılırsa bağlantı kesilir.`;
+    name.append(t);
+  }
   if (a.needs_login) name.append(tag("giriş gerekli", true));
-  else if (a.stale) {
+  // A ban says more than an unused session does; one warning of the two is enough.
+  else if (a.stale && !ban) {
     // Riot ends sessions that go unused; this one may already be gone.
     const t = tag(`${a.idle_days} gündür açılmadı`, true);
     t.title = a.has_password
@@ -187,7 +397,39 @@ function row(a, i) {
       : "Uzun süredir kullanılmayan oturumu Riot sonlandırmış olabilir. Öyleyse Riot Client'ta bir kez elle giriş yapman gerekir.";
     name.append(t);
   }
-  if (a.hotkey) name.append(tag(hotkeyLabel(a.hotkey)));
+  const sub = document.createElement("span");
+  sub.className = "sub";
+  if (active) {
+    const on = document.createElement("span");
+    on.className = "on";
+    on.textContent = "Açık";
+    sub.append(on);
+  }
+  sub.append(a.riot_id || (a.has_session ? "Oturum kayıtlı" : a.has_password ? "Şifreyle giriş" : "Giriş bekliyor"));
+  const who = document.createElement("span");
+  who.className = "who";
+  who.append(name, sub);
+
+  // Where it stands: tier and division, and how far into it.
+  const standing = document.createElement("span");
+  standing.className = rank ? "rank" : "rank none";
+  const line = document.createElement("span");
+  line.className = "rank-line";
+  const tier = document.createElement("b");
+  tier.textContent = rank ? `${rank.tier} ${rank.division}`.trim() : a.game === "valorant" ? "VALORANT" : a.level ? "Derecesiz" : "Rank bilinmiyor";
+  line.append(tier);
+  if (rank) {
+    const lp = document.createElement("span");
+    lp.textContent = `${rank.lp} LP`;
+    line.append(lp);
+  }
+  const bar = document.createElement("span");
+  bar.className = "lp";
+  const fill = document.createElement("i");
+  // Up to Diamond a division is a hundred points; above it the points only grow.
+  fill.style.setProperty("--lp", rank ? (rank.division ? Math.min(rank.lp, 100) / 100 : 1) : 0);
+  bar.append(fill);
+  standing.append(line, bar);
 
   const detail = document.createElement("span");
   detail.className = "detail";
@@ -197,35 +439,45 @@ function row(a, i) {
     s.className = cls;
     detail.append(s);
   };
-  if (a.id === view.active) part("Açık", "on");
-  if (a.rank) part(a.rank, "rank");
-  else if (a.level) part("Derecesiz");
   if (a.level) part(`Seviye ${a.level}`);
   if (a.game === "client") part(GAME_NAMES.client);
-  if (a.riot_id) part(a.riot_id);
-  if (!detail.childElementCount) part(a.has_session ? "Oturum kayıtlı" : "Şifreyle giriş");
+  if (a.hotkey) part(hotkeyLabel(a.hotkey), "key");
+  if (a.note) part(a.note, "note");
 
-  go.append(name, detail);
+  go.append(crest(rank), who, standing, detail);
 
+  const acts = document.createElement("span");
+  acts.className = "acts";
+  const games = a.game === "both" ? ["lol", "valorant"] : [];
+  for (const game of games) {
+    const alt = document.createElement("button");
+    alt.type = "button";
+    alt.className = "alt open";
+    alt.textContent = game === "lol" ? "League" : "VALORANT";
+    alt.title = `${GAME_NAMES[game]} ile aç`;
+    alt.disabled = busy !== null;
+    alt.addEventListener("click", () => switchTo(a, game));
+    acts.append(alt);
+  }
+  if (!games.length) {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "open";
+    open.textContent = active ? (a.game === "client" ? "Riot Client'ı aç" : "Oyunu aç") : "Hesaba geç";
+    open.disabled = busy !== null;
+    open.addEventListener("click", () => switchTo(a, rowGame(a)));
+    acts.append(open);
+  }
   const more = document.createElement("button");
   more.type = "button";
   more.className = "more";
   more.textContent = "⋯";
-  more.title = "Ayarlar";
+  more.title = "Hesap ayarları";
+  more.setAttribute("aria-label", `${a.name} ayarları`);
   more.addEventListener("click", () => openEdit(a.id));
+  acts.append(more);
 
-  li.append(go);
-  for (const game of rowGames(a)) {
-    const alt = document.createElement("button");
-    alt.type = "button";
-    alt.className = "alt";
-    alt.textContent = GAME_SHORT[game];
-    alt.title = `${GAME_NAMES[game]} ile aç`;
-    alt.disabled = busy !== null;
-    alt.addEventListener("click", () => switchTo(a, game));
-    li.append(alt);
-  }
-  li.append(more);
+  li.append(go, acts);
   return li;
 }
 
@@ -251,16 +503,101 @@ async function refresh() {
   if (!$("view-settings").hidden) fillSettings();
 }
 
+// ---- the track: what a switch is doing -----------------------------------------
+// The app reports each step of a switch and for which account. They are
+// drawn as stations on a line along the bottom of the window: reached ones
+// behind, the current one lit, the rest ahead. The sign-in is followed long
+// after the switch command itself has returned, and a switch can also start
+// from a hotkey or the tray, so the track listens rather than being told.
+
+const STATIONS = {
+  closing: ["Kapat", "Riot Client kapatılıyor"],
+  restoring: ["Oturum", "Kayıtlı oturum yerine konuyor"],
+  starting: ["Aç", "Riot Client açılıyor"],
+  waiting: ["Giriş", "Riot'un oturumu kabul etmesi bekleniyor"],
+  signing_in: ["Şifre", "Kayıtlı şifreyle giriş yapılıyor"],
+  game: ["Oyun", "Giriş yapıldı, oyun açılıyor"],
+};
+const ROUTE = ["closing", "restoring", "starting", "waiting", "game"];
+let track = null; // { account, route, at, started, timer, verifying, over }
+
+function drawTrack() {
+  const stage = $("stage");
+  stage.classList.toggle("tracking", !!track);
+  $("track").hidden = !track;
+  if (!track) return;
+  const account = view.accounts.find((a) => a.id === track.account);
+  $("track-name").textContent = account ? account.name : "Hesap değiştiriliyor";
+  $("track").className = track.over || "";
+  $("track-text").textContent = track.over === "done" ? "Giriş yapıldı"
+    : track.verifying ? "Riot doğrulama kodu istiyor; kodu Riot Client'ta gir"
+    : track.over === "failed" ? "Tamamlanmadı"
+    : STATIONS[track.route[track.at]][1];
+  $("track-stations").replaceChildren(...track.route.map((step, i) => {
+    const li = document.createElement("li");
+    const reached = i < track.at || track.over === "done";
+    if (reached) li.className = "reached";
+    else if (i === track.at) li.className = track.over === "failed" && !track.verifying ? "failed" : "now";
+    li.append(document.createElement("i"), STATIONS[step][0]);
+    return li;
+  }));
+  $("track-cancel").hidden = !!track.over;
+  $("track-close").hidden = !track.over;
+  $("track-time").textContent = `${Math.round((Date.now() - track.started) / 1000)} sn`;
+}
+
+function endTrack() {
+  if (track) clearInterval(track.timer);
+  track = null;
+  drawTrack();
+}
+
+listen("switch-step", (e) => {
+  const { step, account } = e.payload;
+  if (step === "cancelled") return endTrack();
+  if (step === "done" || step === "stopped") {
+    if (!track) return;
+    clearInterval(track.timer);
+    track.over = step === "done" ? "done" : "failed";
+    drawTrack();
+    // A switch that went through needs no reading; one that did not stays.
+    if (step === "done") {
+      const finished = track;
+      setTimeout(() => { if (track === finished) endTrack(); }, 2500);
+    }
+    return;
+  }
+  if (step === "verifying") {
+    if (track) track.verifying = true;
+    return drawTrack();
+  }
+  if (!(step in STATIONS)) return;
+  // A new switch starts a new line, from the station it begins at: one for
+  // an account that is already signed in has only the game to open.
+  if (!track || track.over || track.account !== account) {
+    if (track) clearInterval(track.timer);
+    const from = Math.max(ROUTE.indexOf(step), 0);
+    track = { account, route: ROUTE.slice(from), at: 0, started: Date.now(), verifying: false, over: null };
+    track.timer = setInterval(drawTrack, 1000);
+  }
+  // The password station appears only on switches that come to need it.
+  if (step === "signing_in" && !track.route.includes(step)) track.route.splice(track.route.length - 1, 0, step);
+  track.at = Math.max(track.route.indexOf(step), track.at);
+  drawTrack();
+});
+
+$("track-cancel").addEventListener("click", () => invoke("cancel_switch").catch(() => {}));
+$("track-close").addEventListener("click", endTrack);
+
 // `game` opens that game this once instead of the account's own. `force`
 // is the user's "switch anyway" after an unreadable League client state.
 async function switchTo(a, game = null, force = false) {
   if (busy) return;
   busy = a.id;
-  say(`${a.name} açılıyor…`);
+  say("");
   render();
   try {
     await invoke("switch_account", { id: a.id, game, force });
-    say("");
     $("filter").value = "";
   } catch (e) {
     reportSwitchError(e, a.id, game);
@@ -301,37 +638,50 @@ function reportSwitchError(e, id, game = null) {
 const DRAG_START = 6; // px of movement before a press becomes a drag
 
 function startDrag(e, li) {
-  if (e.button !== 0 || busy) return;
+  // Dragging rearranges the stored order, so it needs that order on screen.
+  if (e.button !== 0 || busy || sortBy !== "manual" || statusFilter !== "all") return;
   const rows = [...$("accounts").querySelectorAll(".account")];
   if (rows.length < 2) return;
   const from = rows.indexOf(li);
-  drag = { li, rows, from, to: from, startY: e.clientY, active: false, step: 0 };
+  drag = { li, rows, from, to: from, startX: e.clientX, startY: e.clientY, active: false, slots: [] };
 }
 
+// Works the same for a column of rows and a grid of cards: every account
+// has a slot (where it sat when the drag began); the held one follows the
+// pointer, and the others move to the slots they would have if it were
+// dropped on the slot nearest to it.
 window.addEventListener("pointermove", (e) => {
   if (!drag) return;
+  const dx = e.clientX - drag.startX;
   const dy = e.clientY - drag.startY;
   if (!drag.active) {
-    if (Math.abs(dy) < DRAG_START) return;
+    if (Math.hypot(dx, dy) < DRAG_START) return;
     drag.active = true;
-    const r = drag.rows;
-    // Distance between two rows, gap included.
-    drag.step = r.length > 1 ? Math.abs(r[1].getBoundingClientRect().top - r[0].getBoundingClientRect().top) : drag.li.offsetHeight;
+    drag.slots = drag.rows.map((r) => {
+      const b = r.getBoundingClientRect();
+      return { x: b.left, y: b.top, cx: b.left + b.width / 2, cy: b.top + b.height / 2 };
+    });
     $("accounts").classList.add("reordering");
     drag.li.classList.add("dragging");
   }
-  const n = drag.rows.length;
-  const min = -drag.from * drag.step - drag.step / 2;
-  const max = (n - 1 - drag.from) * drag.step + drag.step / 2;
-  const y = Math.max(min, Math.min(max, dy));
-  drag.li.style.transform = `translateY(${y}px)`;
-  drag.to = Math.max(0, Math.min(n - 1, drag.from + Math.round(y / drag.step)));
+  drag.li.style.transform = `translate(${dx}px, ${dy}px)`;
+  const mine = drag.slots[drag.from];
+  const at = { x: mine.cx + dx, y: mine.cy + dy };
+  let best = drag.from;
+  let bestDistance = Infinity;
+  drag.slots.forEach((slot, i) => {
+    const d = Math.hypot(slot.cx - at.x, slot.cy - at.y);
+    if (d < bestDistance) { bestDistance = d; best = i; }
+  });
+  drag.to = best;
   drag.rows.forEach((row, i) => {
     if (row === drag.li) return;
-    let shift = 0;
-    if (drag.from < drag.to && i > drag.from && i <= drag.to) shift = -drag.step;
-    if (drag.from > drag.to && i >= drag.to && i < drag.from) shift = drag.step;
-    row.style.transform = shift ? `translateY(${shift}px)` : "";
+    let slot = i;
+    if (drag.from < drag.to && i > drag.from && i <= drag.to) slot = i - 1;
+    if (drag.from > drag.to && i >= drag.to && i < drag.from) slot = i + 1;
+    const move = drag.slots[slot];
+    const home = drag.slots[i];
+    row.style.transform = slot === i ? "" : `translate(${move.x - home.x}px, ${move.y - home.y}px)`;
   });
 });
 
@@ -343,7 +693,7 @@ function endDrag() {
   $("accounts").classList.remove("reordering");
   rows[from].classList.remove("dragging");
   if (!active) return;
-  // The release would otherwise count as a click on the row.
+  // The release would otherwise count as a click on the account.
   // The browser sends that click right after this event; if the pointer
   // was released elsewhere none comes, so the guard is dropped a tick later.
   const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
@@ -470,9 +820,6 @@ function fillSettings() {
   $("set-update-auto").checked = !!update.enabled;
   $("set-autostart").checked = !!view.autostart;
   if (document.activeElement !== $("set-window-hotkey")) $("set-window-hotkey").value = hotkeyLabel(view.window_hotkey || "");
-  const sec = view.security;
-  $("set-security-text").textContent =
-    `${view.accounts.length} hesap · uygulama kilidi ${sec.lock_enabled ? "açık" : "kapalı"}`;
 }
 
 $("settings").addEventListener("click", () => {
@@ -480,10 +827,20 @@ $("settings").addEventListener("click", () => {
   fillSettings();
   show("settings");
 });
-$("set-back").addEventListener("click", () => {
+// Leaving by the rail closes whatever was open on the accounts' side.
+$("rail").addEventListener("click", (e) => {
+  if (!e.target.closest(".nav")) return;
+  wizard = null;
+  editing = null;
+}, { capture: true });
+
+// The rail's first entry leads back to the accounts from anywhere.
+document.querySelector('#rail .nav[data-view="list"]').addEventListener("click", () => {
   show("list");
   $("filter").focus();
+  refresh();
 });
+
 $("set-security").addEventListener("click", () => {
   secSay("");
   $("sec-wipe").textContent = "Tüm verileri sil";
@@ -538,6 +895,8 @@ function openEdit(id) {
   $("edit-password").value = "";
   $("edit-remove").textContent = "Hesabı sil";
   $("edit-name").value = editAccount().name;
+  $("edit-note").value = editAccount().note || "";
+  $("edit-copy-master").value = "";
   fillEdit();
   show("edit");
 }
@@ -559,6 +918,8 @@ function fillEdit() {
     ? "Şifre kayıtlı. Oturumun süresi dolarsa otomatik yazılır."
     : "Şifre kaydedersen, oturumun süresi dolduğunda giriş otomatik yapılır. Şifre bu bilgisayarda şifreli saklanır.";
   $("edit-cred-clear").hidden = !a.has_password;
+  $("edit-copy").hidden = !a.has_password;
+  $("edit-copy-master").hidden = !view.security.lock_enabled;
 }
 
 function closeEdit() {
@@ -584,6 +945,25 @@ $("edit-back").addEventListener("click", closeEdit);
 $("edit-name").addEventListener("change", (e) => {
   const name = e.target.value.trim();
   if (name && name !== editAccount().name) editCall("rename_account", { name });
+});
+
+$("edit-note").addEventListener("change", (e) => {
+  if (e.target.value.trim() !== (editAccount().note || "")) editCall("set_note", { note: e.target.value }, "Not kaydedildi.");
+});
+
+$("edit-copy-go").addEventListener("click", async (e) => {
+  const master = view.security.lock_enabled ? $("edit-copy-master").value : null;
+  await whileWorking(e.currentTarget, async () => {
+    try {
+      const seconds = await invoke("copy_password", { id: editing, master });
+      $("edit-message").className = "hint";
+      $("edit-message").textContent = `Şifre panoda. ${seconds} saniye sonra panodan silinecek.`;
+    } catch (err) {
+      $("edit-message").className = "hint error";
+      $("edit-message").textContent = errorText(err);
+    }
+  });
+  $("edit-copy-master").value = "";
 });
 
 $("edit-game").addEventListener("change", (e) => editCall("set_game", { game: e.target.value }));
@@ -861,10 +1241,6 @@ async function secCall(command, args, okText, sealText = null) {
 }
 
 
-$("sec-back").addEventListener("click", () => {
-  fillSettings();
-  show("settings");
-});
 $("sec-open").addEventListener("click", (e) => whileWorking(e.currentTarget, () => secCall("open_data_dir", {}, "")));
 $("sec-enable").addEventListener("click", () => {
   if ($("sec-new").value !== $("sec-new2").value) return secSay("İki şifre aynı değil.", true);
@@ -921,6 +1297,232 @@ window.addEventListener("focus", () => {
   if (!$("view-list").hidden) $("filter").focus();
   refresh();
 });
+// ---- moving accounts in and out -----------------------------------------------
+
+function dataSay(text, isError = false) {
+  $("data-message").className = isError ? "hint error" : "hint";
+  $("data-message").textContent = text;
+  if (text) $("data-message").scrollIntoView({ block: "nearest" });
+}
+
+// "3 hesap eklendi, 2 zaten kayıtlıydı" from an import's numbers; `verb`
+// is "eklendi" for what was done and "eklenecek" for a preview.
+function importText(done, verb) {
+  const parts = [`${done.added} hesap ${verb}`];
+  if (done.already_here) parts.push(`${done.already_here} zaten kayıtlı`);
+  if (done.incomplete) parts.push(`${done.incomplete} satır ya da kayıt eksik`);
+  return parts.join(", ");
+}
+
+// The master password box is only there when the app lock is on.
+const dataMaster = () => (view.security.lock_enabled ? $("data-master").value : null);
+
+function openData() {
+  dataSay("");
+  for (const id of ["data-master", "data-backup-pass", "data-backup-pass2", "data-restore-pass", "data-bulk"]) $(id).value = "";
+  $("data-master").hidden = !view.security.lock_enabled;
+  $("data-restore-confirm").hidden = true;
+  $("data-bulk-preview").textContent = "";
+  $("data-bulk-go").disabled = true;
+  $("data-plain-ok").checked = false;
+  $("data-plain").disabled = true;
+  show("data");
+}
+
+$("set-data").addEventListener("click", openData);
+$("data-backup").addEventListener("click", (e) => whileWorking(e.currentTarget, async () => {
+  const password = $("data-backup-pass").value;
+  if (password !== $("data-backup-pass2").value) return dataSay("İki yedek parolası aynı değil.", true);
+  try {
+    const path = await withSeal("close", "Yedek şifreleniyor…", "Şifrelendi", () => invoke("export_backup", { master: dataMaster(), password }));
+    dataSay(`Yedek alındı: ${path}`);
+    for (const id of ["data-master", "data-backup-pass", "data-backup-pass2"]) $(id).value = "";
+  } catch (err) {
+    dataSay(errorText(err), true);
+  }
+}));
+
+// A backup is opened and counted first; it is added only after a second yes.
+let restoreFile = null;
+$("data-restore").addEventListener("click", () => $("data-restore-file").click());
+$("data-restore-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) return dataSay("Bu dosya bir yedek olamayacak kadar büyük.", true);
+  restoreFile = await file.text();
+  try {
+    const preview = await invoke("import_backup", { file: restoreFile, password: $("data-restore-pass").value, dryRun: true });
+    $("data-restore-preview").textContent = `Bu yedekten ${importText(preview, "eklenecek")}.`;
+    $("data-restore-go").disabled = !preview.added;
+    $("data-restore-confirm").hidden = false;
+    dataSay("");
+  } catch (err) {
+    restoreFile = null;
+    $("data-restore-confirm").hidden = true;
+    dataSay(errorText(err), true);
+  }
+});
+$("data-restore-cancel").addEventListener("click", () => {
+  restoreFile = null;
+  $("data-restore-confirm").hidden = true;
+});
+$("data-restore-go").addEventListener("click", (e) => whileWorking(e.currentTarget, async () => {
+  try {
+    const done = await invoke("import_backup", { file: restoreFile, password: $("data-restore-pass").value, dryRun: false });
+    dataSay(`${importText(done, "eklendi")}. Şifresi olmayan hesaplara bir kez elle giriş yapman gerekir.`);
+  } catch (err) {
+    dataSay(errorText(err), true);
+  }
+  restoreFile = null;
+  $("data-restore-pass").value = "";
+  $("data-restore-confirm").hidden = true;
+  await refresh();
+}));
+
+// Pasted lines are counted as they are typed, so what "Ekle" will do is known before it is pressed.
+let bulkTimer = null;
+$("data-bulk").addEventListener("input", () => {
+  clearTimeout(bulkTimer);
+  $("data-bulk-go").disabled = true;
+  bulkTimer = setTimeout(async () => {
+    const lines = $("data-bulk").value;
+    if (!lines.trim()) return void ($("data-bulk-preview").textContent = "");
+    try {
+      const preview = await invoke("bulk_add", { lines, dryRun: true });
+      $("data-bulk-preview").textContent = `${importText(preview, "eklenecek")}.`;
+      $("data-bulk-go").disabled = !preview.added;
+    } catch (err) {
+      $("data-bulk-preview").textContent = errorText(err);
+    }
+  }, 300);
+});
+$("data-bulk-go").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  await whileWorking(button, async () => {
+    try {
+      const done = await withSeal("close", "Şifreler şifreleniyor…", "Şifrelendi", () => invoke("bulk_add", { lines: $("data-bulk").value, dryRun: false }));
+      dataSay(`${importText(done, "eklendi")}.`);
+      $("data-bulk").value = "";
+      $("data-bulk-preview").textContent = "";
+    } catch (err) {
+      dataSay(errorText(err), true);
+    }
+    await refresh();
+  });
+  // Whatever is in the box now has to be counted again before it can be added.
+  button.disabled = true;
+});
+
+// The file is read here and its text handed to the app; nothing of it is
+// kept in the window afterwards.
+$("sec-import").addEventListener("click", () => $("sec-import-file").click());
+$("sec-import-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) return dataSay("Bu dosya bir hesap listesi olamayacak kadar büyük.", true);
+  try {
+    const done = await invoke("import_league_accounts", { json: await file.text() });
+    dataSay(`${importText(done, "eklendi")}. Dışa aktarma dosyasını silmeyi unutma.`);
+  } catch (err) {
+    dataSay(errorText(err), true);
+  }
+  await refresh();
+});
+
+$("data-plain-ok").addEventListener("change", (e) => {
+  $("data-plain").disabled = !e.target.checked;
+});
+$("data-plain").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  await whileWorking(button, async () => {
+    try {
+      const path = await invoke("export_plain", { master: dataMaster(), region: $("data-plain-region").value });
+      dataSay(`Açık şifreli dosya oluşturuldu: ${path}. İşin bitince bu dosyayı sil.`);
+    } catch (err) {
+      dataSay(errorText(err), true);
+    }
+  });
+  // The warning is agreed to once per file, not once and for all.
+  $("data-plain-ok").checked = false;
+  button.disabled = true;
+  $("data-master").value = "";
+});
+
+// ---- the diagnostic log --------------------------------------------------------
+// Each line of the file is a time in Unix seconds and a sentence. Shown
+// with the time as a clock would say it, a rule above each new switch, and
+// the lines that speak of something going wrong marked.
+
+const LOG_TROUBLE = /did not|gave up|lost the window|refused|needs a manual|not possible|not confirmed|failed|could not|was stopped|discarded|asks for a verification/;
+let logText = "";
+
+function logLine(line) {
+  const at = line.indexOf(" ");
+  const seconds = Number(line.slice(0, at));
+  const text = at > 0 && seconds ? line.slice(at + 1) : line;
+  const when = seconds ? new Date(seconds * 1000) : null;
+  const stamp = when ? when.toLocaleString("tr", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+  const li = document.createElement("li");
+  if (text.startsWith("switch: client closed") || text.startsWith("switch: the client did not quit")) li.className = "start";
+  if (LOG_TROUBLE.test(text)) li.classList.add("bad");
+  const time = document.createElement("time");
+  time.textContent = stamp;
+  const body = document.createElement("span");
+  const colon = text.indexOf(": ");
+  if (colon > 0 && colon < 12) {
+    const part = document.createElement("b");
+    part.className = "part";
+    part.textContent = text.slice(0, colon + 1);
+    body.append(part, text.slice(colon + 1));
+  } else {
+    body.textContent = text;
+  }
+  li.append(time, body);
+  return { li, plain: `${stamp}  ${text}` };
+}
+
+async function openLog() {
+  show("log");
+  $("log-message").className = "hint";
+  $("log-message").textContent = "";
+  let raw = "";
+  try {
+    raw = await invoke("read_log");
+  } catch (e) {
+    $("log-message").className = "hint error";
+    $("log-message").textContent = errorText(e);
+  }
+  const lines = (raw || "").split("\n").filter((l) => l.trim()).map(logLine);
+  logText = lines.map((l) => l.plain).join("\n");
+  $("log-lines").replaceChildren(...lines.map((l) => l.li));
+  $("log-lines").hidden = !lines.length;
+  $("log-copy").disabled = !lines.length;
+  if (!lines.length && !$("log-message").textContent) $("log-message").textContent = "Henüz kayıt yok. İlk hesap geçişinden sonra burada satırlar görünür.";
+  // The newest lines are the ones asked about.
+  const main = $("log-lines").parentElement;
+  main.scrollTop = main.scrollHeight;
+}
+
+$("nav-log").addEventListener("click", openLog);
+$("log-refresh").addEventListener("click", (e) => whileWorking(e.currentTarget, openLog));
+$("log-copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(logText);
+  } catch {
+    // Where the clipboard is not offered to the page, the old way still works.
+    const box = document.createElement("textarea");
+    box.value = logText;
+    document.body.append(box);
+    box.select();
+    document.execCommand("copy");
+    box.remove();
+  }
+  $("log-message").className = "hint";
+  $("log-message").textContent = "Kayıt panoya kopyalandı.";
+});
+
 // Using the window counts as using the app, so the lock does not close
 // itself under the user's hands. Told at most twice a minute.
 let lastSeenHere = 0;
@@ -941,6 +1543,7 @@ setInterval(() => {
 }, 2000);
 
 (async () => {
+  show("list");
   await refresh();
   if (!view.accounts.length) openWizard(); // first run
   else $("filter").focus();

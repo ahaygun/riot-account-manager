@@ -96,6 +96,20 @@ pub struct Account {
     /// Unix seconds of the last time Riot accepted this account's session
     /// (or a sign-in to it), as far as we saw. Zero if never.
     pub last_ok: u64,
+    /// A few words of the user's own about this account.
+    pub note: String,
+    /// League region code as other tools write it ("euw", "tr"), when an
+    /// import said so. Only carried along, for exporting again.
+    pub region: Option<String>,
+    /// A suspension from League that Riot reported at the last sign-in.
+    pub ban: Option<Ban>,
+}
+
+/// A suspension from playing League.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Ban {
+    /// When it ends, in Unix milliseconds; `None` for a permanent one.
+    pub until: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

@@ -3,24 +3,25 @@
    never fetches anything, fonts included. Motion uses transform and
    opacity only, so it costs nothing while idle. */
 :root {
+  --night: #0f1322;      /* the rail, behind everything */
   --ink: #141829;        /* window */
-  --slate: #1d2238;      /* rows, fields */
+  --slate: #1d2238;      /* cards, fields */
   --slate-up: #262c47;   /* hover, raised */
   --edge: #323a5c;       /* hairlines */
   --paper: #f1f3fb;      /* text */
   --mist: #9aa3c4;       /* secondary text */
   --brass: #e3b25c;      /* lock, primary action */
   --brass-deep: #b98a3a;
-  --mint: #5fd4a8;       /* signed in */
+  --mint: #5fd4a8;       /* signed in, done */
   --rose: #f0718a;       /* needs attention, destructive */
   --ease: cubic-bezier(.2, .8, .2, 1);
   --click: cubic-bezier(.3, 1.6, .5, 1); /* slight overshoot, like a latch */
+  --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-
 html, body { height: 100%; }
 
 body {
@@ -32,20 +33,85 @@ body {
   overflow: hidden;
 }
 
+/* ---- the shell: a rail on the left, the stage beside it ---- */
+#app { height: 100%; display: grid; grid-template-columns: 208px minmax(0, 1fr); }
+
+#rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 10px 12px;
+  background: var(--night);
+  border-right: 1px solid rgba(50, 58, 92, .5);
+  min-height: 0;
+}
+.brand { display: flex; align-items: center; gap: 9px; padding: 0 8px 16px; font: 600 16px/1 var(--display); letter-spacing: -.01em; }
+.brand svg { width: 26px; height: 26px; color: var(--brass); flex: none; }
+.spacer { flex: 1; }
+
+#rail nav { display: grid; gap: 2px; }
+.nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: none;
+  color: var(--mist);
+  text-align: left;
+}
+.nav svg { width: 16px; height: 16px; flex: none; }
+.nav > span:first-of-type { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.nav:hover { background: var(--slate); color: var(--paper); }
+.nav[aria-current="page"] { background: var(--slate); color: var(--paper); box-shadow: inset 2px 0 0 var(--brass); }
+.nav .count { color: var(--mist); font-size: 12px; font-variant-numeric: tabular-nums; }
+.gear { transition: transform .3s var(--ease); }
+.nav:hover .gear { transform: rotate(45deg); }
+/* A small dot on Ayarlar when an update is waiting. */
+.dot-badge { width: 7px; height: 7px; border-radius: 50%; background: var(--brass); }
+
+/* What needs a look: each line filters the list to it. */
+.status { display: grid; gap: 1px; margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(50, 58, 92, .5); }
+.status button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: none;
+  color: var(--mist);
+  font-size: 13px;
+  text-align: left;
+}
+.status button::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--edge); flex: none; }
+.status button[data-status="open"]::before { background: var(--mint); }
+.status button[data-status="attention"]::before, .status button[data-status="banned"]::before { background: var(--rose); }
+.status button[data-status="stale"]::before { background: var(--brass); }
+.status button span { flex: 1; }
+.status button b { font-weight: 400; font-variant-numeric: tabular-nums; }
+.status button:hover { color: var(--paper); background: var(--slate); }
+.status button[aria-checked="true"] { color: var(--paper); background: var(--slate); }
+
+.lock-state { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 9px; background: none; color: var(--mist); font-size: 13px; text-align: left; }
+.lock-state:hover { background: var(--slate); color: var(--paper); }
+.version { margin: 0; padding: 4px 10px 0; color: var(--mist); font-size: 11px; opacity: .7; }
+
+#stage { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
 /* Each view slides in a few pixels when it opens. */
-.view { height: 100%; display: flex; flex-direction: column; animation: view-in .18s var(--ease); }
+.view { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: view-in .18s var(--ease); }
 @keyframes view-in { from { opacity: 0; transform: translateY(6px); } }
 
-header { padding: 14px 14px 10px; }
-.titlebar { display: flex; align-items: center; gap: 6px; }
+.titlebar { display: flex; align-items: center; gap: 8px; padding: 20px 24px 12px; }
 .titlebar h1 {
   margin: 0;
-  font: 600 17px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-  letter-spacing: -.01em;
+  font: 600 22px/1.2 var(--display);
+  letter-spacing: -.02em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-input[type="text"], input[type="password"], select {
+input[type="text"], input[type="password"], select, textarea {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid transparent;
@@ -57,9 +123,8 @@ input[type="text"], input[type="password"], select {
   transition: border-color .15s, background-color .15s;
 }
 input:hover, select:hover { background: var(--slate-up); }
-input:focus, select:focus { border-color: var(--brass); background: var(--slate); }
-input::placeholder { color: var(--mist); }
-#filter { padding: 12px 14px; font-size: 15px; }
+input:focus, select:focus, textarea:focus { border-color: var(--brass); background: var(--slate); }
+input::placeholder, textarea::placeholder { color: var(--mist); }
 
 button {
   padding: 9px 14px;
@@ -82,98 +147,135 @@ button.danger { color: var(--rose); }
 button.link { background: none; color: var(--mist); padding: 4px 6px; }
 button.link:hover { color: var(--paper); background: none; }
 
-main { flex: 1; overflow-y: auto; padding: 0 14px; }
-main::-webkit-scrollbar { width: 8px; }
-main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 4px; }
+main { flex: 1; overflow-y: auto; padding: 0 24px 20px; }
+main::-webkit-scrollbar { width: 10px; }
+main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 5px; border: 2px solid var(--ink); }
 
-/* ---- game filter ---- */
-.seg { display: flex; gap: 2px; margin-top: 8px; padding: 3px; border-radius: 10px; background: var(--slate); }
-.seg button { flex: 1; padding: 6px 8px; border-radius: 8px; background: none; color: var(--mist); font-size: 12px; font-weight: 600; }
+/* ---- the bar above the accounts ---- */
+.bar { display: flex; align-items: center; gap: 10px; padding: 18px 24px 14px; }
+#filter { flex: 1; min-width: 180px; padding: 11px 14px; font-size: 15px; }
+.seg { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--slate); flex: none; }
+.seg button { padding: 6px 12px; border-radius: 8px; background: none; color: var(--mist); font-size: 12px; font-weight: 600; }
 .seg button:hover { color: var(--paper); background: none; }
 .seg button[aria-checked="true"] { background: var(--slate-up); color: var(--paper); box-shadow: inset 0 0 0 1px var(--edge); }
+.seg.icons button { padding: 6px 8px; display: grid; }
+.seg.icons svg { width: 16px; height: 16px; }
+.tools { display: flex; align-items: center; gap: 10px; flex: none; }
+.tools select { width: auto; max-width: 150px; padding: 8px 10px; font-size: 13px; }
 
-/* ---- account list ---- */
-#accounts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+/* ---- accounts ---- */
+#accounts { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+#accounts.cards { grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); }
+#accounts.rows { gap: 6px; }
 
 .account {
+  --tier: var(--edge);
   position: relative;
   display: flex;
-  align-items: stretch;
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--slate);
   overflow: hidden;
-  transition: background-color .15s, transform .12s var(--ease);
+  transition: background-color .15s, transform .12s var(--ease), box-shadow .15s;
 }
 .account:hover, .account.selected { background: var(--slate-up); }
-/* Reordering: the held row floats under the pointer, the others make room. */
-#accounts.reordering .account { transition: transform .16s var(--ease); }
-#accounts.reordering .account.dragging {
-  z-index: 2;
-  transition: none;
-  background: var(--slate-up);
-  box-shadow: 0 10px 24px rgba(4, 6, 14, .55), inset 0 0 0 1px var(--brass-deep);
-  cursor: grabbing;
-}
-#accounts.reordering { cursor: grabbing; }
-#accounts.reordering button { pointer-events: none; }
-.account:active { transform: scale(.985); }
-
-/* The bar on the left edge says whose session is open. */
-.account::before {
-  content: "";
-  position: absolute;
-  left: 0; top: 10px; bottom: 10px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: var(--mint);
-  transform: scaleY(0);
-  transition: transform .25s var(--click);
-}
-.account.active::before { transform: scaleY(1); }
 .account.selected { box-shadow: inset 0 0 0 1px var(--edge); }
+.account.active { box-shadow: inset 0 0 0 1px rgba(95, 212, 168, .45); }
 
-/* Rows arrive one after another, once, when the list first appears. */
-#accounts.arriving .account { animation: row-in .28s var(--ease) backwards; animation-delay: calc(var(--i) * 35ms); }
-@keyframes row-in { from { opacity: 0; transform: translateY(8px); } }
+/* Tier colours, for the crest and the bar under the rank. */
+.account[data-tier="iron"] { --tier: #7d7f8c; }
+.account[data-tier="bronze"] { --tier: #b0794f; }
+.account[data-tier="silver"] { --tier: #a9b4c8; }
+.account[data-tier="gold"] { --tier: #e3b25c; }
+.account[data-tier="platinum"] { --tier: #4fc3c0; }
+.account[data-tier="emerald"] { --tier: #45c684; }
+.account[data-tier="diamond"] { --tier: #6f9cf5; }
+.account[data-tier="master"] { --tier: #b07cf0; }
+.account[data-tier="grandmaster"] { --tier: #ee6a6a; }
+.account[data-tier="challenger"] { --tier: #f3d98b; }
 
 .account .go {
   flex: 1;
   min-width: 0;
   display: grid;
-  gap: 2px;
-  padding: 11px 6px 11px 16px;
   border-radius: 0;
   background: none;
   text-align: left;
+  white-space: normal;
 }
 .account .go:active { transform: none; }
-.account .name { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; min-width: 0; }
-.account .name > span:first-child { overflow: hidden; text-overflow: ellipsis; }
-.account .detail { display: flex; gap: 10px; color: var(--mist); font-size: 12px; overflow: hidden; }
-.account .detail span { flex: none; }
-.account .detail .on { color: var(--mint); }
-.account .detail .rank { color: var(--brass); }
 
-.tag { flex: none; padding: 1px 7px; border-radius: 6px; background: var(--ink); color: var(--mist); font-size: 11px; font-weight: 400; }
+/* The crest: a hexagon in the tier's colour with the division inside. */
+.crest { width: 40px; height: 44px; flex: none; color: var(--tier); }
+.crest text { fill: var(--paper); font: 600 13px var(--display); }
+.crest .hex { fill: color-mix(in srgb, var(--tier) 16%, transparent); stroke: currentColor; }
+
+.account .who { display: grid; gap: 1px; min-width: 0; }
+.account .name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font: 600 16px/1.3 var(--display); letter-spacing: -.01em; }
+/* The name keeps its room; a tag that does not fit beside it goes below. */
+.account .name > span:first-child { flex: 0 1 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account .name .tag { flex: none; }
+.account .sub { color: var(--mist); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account .sub .on { color: var(--mint); margin-right: 8px; }
+
+.account .rank { display: grid; gap: 5px; min-width: 0; }
+.account .rank-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.account .rank-line b { font-weight: 600; color: var(--tier); filter: brightness(1.15); white-space: nowrap; }
+.account .rank-line span { color: var(--mist); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.account .lp { height: 3px; border-radius: 2px; background: var(--ink); overflow: hidden; }
+.account .lp i { display: block; height: 100%; border-radius: 2px; background: var(--tier); transform-origin: left; transform: scaleX(var(--lp, 0)); }
+.account .rank.none .rank-line b { color: var(--mist); font-weight: 400; filter: none; }
+.account .rank.none .lp { visibility: hidden; }
+
+.account .detail { display: flex; gap: 12px; color: var(--mist); font-size: 12px; min-width: 0; overflow: hidden; }
+.account .detail span { flex: none; }
+.account .detail .note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
+
+.tag { flex: none; padding: 1px 7px; border-radius: 6px; background: var(--ink); color: var(--mist); font: 400 11px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; letter-spacing: 0; }
 .tag.warn { background: none; box-shadow: inset 0 0 0 1px var(--rose); color: var(--rose); }
 
-/* Opens the account in its other game. */
-.account .alt {
-  align-self: center;
-  padding: 4px 9px;
-  margin-right: 2px;
-  border-radius: 8px;
-  background: var(--ink);
-  color: var(--mist);
-  font-size: 11px;
-  font-weight: 600;
-}
+.account .acts { display: flex; align-items: center; gap: 6px; flex: none; }
+.account .alt { padding: 6px 11px; border-radius: 8px; background: var(--ink); color: var(--mist); font-size: 12px; font-weight: 600; }
 .account .alt:hover { background: var(--brass); color: #2a1e06; }
+.account .open { padding: 7px 14px; border-radius: 8px; background: var(--ink); font-weight: 600; }
+.account .open:hover { background: var(--brass); color: #2a1e06; }
+.account.active .open { background: none; box-shadow: inset 0 0 0 1px rgba(95, 212, 168, .45); color: var(--mint); }
+.account.active .open:hover { background: var(--mint); color: #0c2a20; }
+.account .more { background: none; color: var(--mist); padding: 4px 10px; font-size: 18px; line-height: 1; }
+.account .more:hover { color: var(--paper); background: var(--ink); }
 
-.account .more { background: none; color: var(--mist); padding: 0 14px; font-size: 18px; border-radius: 0; }
-.account .more:hover { color: var(--paper); background: none; }
+/* Cards: a plate per account. */
+#accounts.cards .account { flex-direction: column; }
+#accounts.cards .go { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "crest who" "rank rank" "detail detail"; gap: 12px 12px; align-items: center; padding: 16px 16px 12px; }
+#accounts.cards .crest { grid-area: crest; }
+#accounts.cards .who { grid-area: who; }
+#accounts.cards .rank { grid-area: rank; }
+#accounts.cards .detail { grid-area: detail; min-height: 18px; }
+#accounts.cards .acts { padding: 0 12px 12px; }
+#accounts.cards .open { flex: 1; }
 
-/* While an account is being opened, a light band travels along its row. */
+/* Rows: one line per account, in columns. */
+#accounts.rows .account { align-items: center; }
+#accounts.rows .go { grid-template-columns: auto minmax(120px, 1.3fr) minmax(130px, 1fr) minmax(0, 1.2fr); gap: 16px; align-items: center; padding: 10px 8px 10px 14px; }
+#accounts.rows .crest { width: 32px; height: 36px; }
+#accounts.rows .acts { padding-right: 10px; }
+
+/* Reordering: the held one floats under the pointer, the others make room. */
+#accounts.reordering .account { transition: transform .16s var(--ease); }
+#accounts.reordering .account.dragging {
+  z-index: 2;
+  transition: none;
+  background: var(--slate-up);
+  box-shadow: 0 14px 30px rgba(4, 6, 14, .6), inset 0 0 0 1px var(--brass-deep);
+  cursor: grabbing;
+}
+#accounts.reordering { cursor: grabbing; }
+#accounts.reordering button { pointer-events: none; }
+
+/* Accounts arrive one after another, once, when the list first appears. */
+#accounts.arriving .account { animation: row-in .28s var(--ease) backwards; animation-delay: calc(var(--i) * 30ms); }
+@keyframes row-in { from { opacity: 0; transform: translateY(8px); } }
+
+/* While an account is being opened, a light band travels along its edge. */
 .account.busy::after {
   content: "";
   position: absolute;
@@ -204,27 +306,92 @@ button.working::after {
   animation: travel 1s linear infinite;
 }
 
-.empty { color: var(--mist); padding: 28px 8px; text-align: center; }
+
+/* Nothing to show: said plainly, with what to do about it. */
+.empty { grid-column: 1 / -1; display: grid; justify-items: center; gap: 6px; padding: 72px 16px; color: var(--mist); text-align: center; }
+.empty b { color: var(--paper); font: 600 18px var(--display); }
 
 /* ---- banners and messages ---- */
-.banner, #message {
+.banner {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 0 14px 8px;
-  padding: 9px 9px 9px 12px;
+  gap: 12px;
+  margin: 0 24px 10px;
+  padding: 10px 10px 10px 14px;
   border-radius: 12px;
   background: var(--slate);
   animation: drop-in .2s var(--ease);
 }
 @keyframes drop-in { from { opacity: 0; transform: translateY(-6px); } }
 .banner.accent { box-shadow: inset 0 0 0 1px var(--brass-deep); }
-.banner p, #message p { margin: 0; flex: 1; }
-#message { margin-top: 8px; margin-bottom: 0; color: var(--mist); }
-#message.error { color: var(--rose); }
+.banner p { margin: 0; flex: 1; }
 
-footer { display: flex; align-items: center; gap: 10px; padding: 10px 14px 14px; }
-footer .spacer { flex: 1; }
+/* A message floats over the stage, above the track. */
+#message {
+  position: absolute;
+  left: 24px; right: 24px; bottom: 16px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px 11px 16px;
+  border-radius: 12px;
+  background: var(--slate-up);
+  box-shadow: 0 12px 32px rgba(4, 6, 14, .55), inset 0 0 0 1px var(--edge);
+  color: var(--paper);
+  animation: rise-in .2s var(--ease);
+}
+#message p { margin: 0; flex: 1; }
+#message.error { box-shadow: 0 12px 32px rgba(4, 6, 14, .55), inset 0 0 0 1px var(--rose); }
+#message.error p { color: var(--rose); }
+#stage.tracking #message { bottom: 88px; }
+@keyframes rise-in { from { opacity: 0; transform: translateY(8px); } }
+
+/* ---- the track: the line a switch travels along ---- */
+#track {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 24px;
+  background: var(--night);
+  border-top: 1px solid rgba(50, 58, 92, .6);
+  animation: rise-in .22s var(--ease);
+}
+.track-who { display: grid; gap: 1px; width: 190px; flex: none; }
+.track-who b { font: 600 15px/1.25 var(--display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-who span { color: var(--mist); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#track.failed .track-who span { color: var(--rose); }
+#track.done .track-who span { color: var(--mint); }
+
+#track-stations { flex: 1; display: flex; margin: 0; padding: 0; list-style: none; min-width: 0; }
+#track-stations li { position: relative; flex: 1; display: grid; justify-items: center; gap: 6px; color: var(--mist); font-size: 11px; white-space: nowrap; }
+/* The rail between two stations; it fills as the switch passes. */
+#track-stations li + li::before {
+  content: "";
+  position: absolute;
+  top: 6px; right: 50%;
+  width: 100%;
+  height: 2px;
+  background: var(--edge);
+}
+#track-stations li + li.reached::before { background: var(--mint); }
+#track-stations li i {
+  position: relative;
+  z-index: 1;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--night);
+  box-shadow: inset 0 0 0 2px var(--edge);
+  transition: background-color .2s, box-shadow .2s, transform .25s var(--click);
+}
+#track-stations li.reached i { background: var(--mint); box-shadow: none; }
+#track-stations li.reached { color: var(--paper); }
+#track-stations li.now i { background: var(--brass); box-shadow: 0 0 0 4px rgba(227, 178, 92, .22); transform: scale(1.15); animation: pulse 1.2s ease-in-out infinite; }
+#track-stations li.now { color: var(--brass); }
+#track-stations li.failed i { background: var(--rose); box-shadow: none; animation: none; }
+#track-stations li.failed { color: var(--rose); }
+@keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(227, 178, 92, .08); } }
+.track-time { width: 44px; text-align: right; color: var(--mist); font-size: 12px; font-variant-numeric: tabular-nums; flex: none; }
 
 /* Checkbox drawn as a switch. */
 .check { display: flex; align-items: center; gap: 8px; color: var(--mist); font-size: 12px; cursor: pointer; white-space: nowrap; }
@@ -251,8 +418,12 @@ footer .spacer { flex: 1; }
 .check input:checked { background: var(--mint); }
 .check input:checked::after { transform: translateX(12px); }
 
+
 /* ---- forms (settings, wizard, security) ---- */
-.form { display: flex; flex-direction: column; gap: 12px; padding-bottom: 14px; }
+.form { display: flex; flex-direction: column; gap: 12px; max-width: 560px; }
+/* Pages made of several cards lay them out side by side when there is room. */
+.form.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 14px; max-width: 1040px; }
+.form.cols > :not(.card) { grid-column: 1 / -1; }
 .form label { display: grid; gap: 5px; color: var(--mist); font-size: 12px; }
 .form .row { display: flex; gap: 6px; }
 .form .row input { flex: 1; }
@@ -265,17 +436,43 @@ legend { color: var(--mist); font-size: 12px; padding: 0 6px; }
 .step { display: flex; flex-direction: column; gap: 12px; animation: view-in .18s var(--ease); }
 .step p, .step ol { margin: 0; }
 .step ol { padding-left: 20px; display: grid; gap: 4px; }
-.choice { display: grid; gap: 4px; padding: 14px; text-align: left; white-space: normal; border-radius: 12px; }
+.choice { display: grid; gap: 4px; padding: 16px; text-align: left; white-space: normal; border-radius: 12px; }
 .choice b { font-size: 15px; }
 .choice span { color: var(--mist); font-size: 12px; }
 
-.card { display: grid; gap: 8px; padding: 14px; border-radius: 12px; background: var(--slate); }
-.card h2 { margin: 0; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.card { display: grid; gap: 9px; padding: 16px; border-radius: 14px; background: var(--slate); }
+.card h2 { margin: 0; font: 600 15px/1.3 var(--display); display: flex; align-items: center; gap: 8px; }
 .card p { margin: 0; }
 .card ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--mist); font-size: 12px; }
-.card button, .card input { background: var(--ink); }
+.card button, .card input, .card select, .card textarea { background: var(--ink); }
 .card button:hover { background: var(--slate-up); }
+.card button.primary { background: var(--brass); }
+.card button.primary:hover { background: #edc276; }
+.card.warn { box-shadow: inset 0 0 0 1px var(--rose); }
+.card.warn h2 { color: var(--rose); }
 .path { user-select: text; word-break: break-all; }
+.form label.check { display: flex; font-size: 13px; color: var(--paper); }
+.form textarea { font: 12px/1.5 ui-monospace, Consolas, monospace; resize: vertical; }
+.form code { padding: 1px 5px; border-radius: 5px; background: var(--ink); font: 11px ui-monospace, Consolas, monospace; }
+
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.muted { color: var(--mist); font-weight: 400; }
+.pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--ink); color: var(--mist); }
+.pill.good { color: var(--mint); }
+.pill.new { color: #2a1e06; background: var(--brass); }
+
+/* ---- the diagnostic log ---- */
+#view-log .form { max-width: none; }
+.log { margin: 0; padding: 10px 0; list-style: none; border-radius: 12px; background: var(--night); font: 12px/1.7 ui-monospace, Consolas, monospace; user-select: text; }
+.log li { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; padding: 0 14px; }
+.log li:hover { background: var(--slate); }
+.log time { color: var(--mist); white-space: nowrap; }
+.log span { overflow-wrap: anywhere; }
+.log .part { color: var(--brass); }
+/* A new switch starts a new block. */
+.log li.start { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(50, 58, 92, .5); }
+.log li.start:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.log li.bad span { color: var(--rose); }
 
 /* Small padlock beside headings and counts: closed when the lock is on. */
 .lock-mark { width: 16px; height: 16px; color: var(--mist); flex: none; }
@@ -325,22 +522,15 @@ legend { color: var(--mist); font-size: 12px; padding: 0 6px; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
-/* ---- settings ---- */
-footer .link { display: inline-flex; align-items: center; gap: 6px; position: relative; }
-.gear { width: 16px; height: 16px; flex: none; }
-#settings:hover .gear { transform: rotate(45deg); }
-.gear { transition: transform .3s var(--ease); }
-/* A small dot on Ayarlar when an update is waiting. */
-.dot-badge { position: absolute; top: 2px; left: 16px; width: 7px; height: 7px; border-radius: 50%; background: var(--brass); box-shadow: 0 0 0 2px var(--ink); }
-.row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.muted { color: var(--mist); font-weight: 400; }
-.pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--ink); color: var(--mist); }
-.pill.good { color: var(--mint); }
-.pill.new { color: #2a1e06; background: var(--brass); }
-.nav-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border-radius: 12px; text-align: left; white-space: normal; }
-.nav-row > span:first-child { display: grid; gap: 2px; }
-.nav-row > span:last-child { color: var(--mist); font-size: 18px; }
-/* Inside forms, a switch sits beside its text, and a primary button keeps its colour in cards. */
-.form label.check { display: flex; font-size: 13px; color: var(--paper); }
-.card button.primary { background: var(--brass); }
-.card button.primary:hover { background: #edc276; }
+
+
+/* A narrow window keeps the rail to its icons. */
+@media (max-width: 900px) {
+  .form.cols { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  #app { grid-template-columns: 56px minmax(0, 1fr); }
+  .brand span, .nav > span, .status, .version, .lock-state span { display: none; }
+  .brand { padding-left: 5px; }
+  .track-who { width: 120px; }
+}

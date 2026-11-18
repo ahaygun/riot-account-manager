@@ -7,15 +7,73 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Main view: the account list -->
+<div id="app">
+  <!-- The rail: where you are, what is stored, and whether it is locked -->
+  <aside id="rail">
+    <div class="brand">
+      <svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9.5" cy="14" r="5.5"/><path d="M15 14h10M21 14v4M25 14v3"/></svg>
+      <span>QuickSwitch</span>
+    </div>
+
+    <nav aria-label="Bölümler">
+      <button type="button" class="nav" data-view="list">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="5.5" r="2.5"/><path d="M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/></svg>
+        <span>Hesaplar</span><span id="nav-count" class="count"></span>
+      </button>
+      <button type="button" class="nav" data-view="data" id="set-data">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8M5 7l3 3 3-3M3 13h10"/></svg>
+        <span>Taşı ve yedekle</span>
+      </button>
+      <button type="button" class="nav" data-view="security" id="set-security">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5 7V5a3 3 0 0 1 6 0v2"/><rect x="3" y="7" width="10" height="7" rx="2"/></svg>
+        <span>Güvenlik</span>
+      </button>
+      <button type="button" class="nav" data-view="log" id="nav-log">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h6"/></svg>
+        <span>Tanı kaydı</span>
+      </button>
+      <button type="button" class="nav" data-view="settings" id="settings">
+        <svg class="gear" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg>
+        <span>Ayarlar</span><span id="settings-dot" class="dot-badge" hidden></span>
+      </button>
+    </nav>
+
+    <!-- What needs a look, as filters on the list -->
+    <div id="status" class="status" role="radiogroup" aria-label="Duruma göre göster" hidden></div>
+
+    <span class="spacer"></span>
+
+    <button id="rail-lock" type="button" class="lock-state" hidden>
+      <svg class="lock-mark" id="footer-lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path class="shackle" d="M5 7V5a3 3 0 0 1 6 0v2"/><rect x="3" y="7" width="10" height="7" rx="2" fill="currentColor" stroke="none"/></svg>
+      <span id="rail-lock-text"></span>
+    </button>
+    <p id="rail-version" class="version"></p>
+  </aside>
+
+  <div id="stage">
+  <!-- Main view: the accounts -->
   <section id="view-list" class="view">
-    <header>
+    <header class="bar">
       <input id="filter" type="text" placeholder="Hesap ara, Enter ile aç" autocomplete="off" spellcheck="false">
       <div id="games" class="seg" role="radiogroup" aria-label="Oyuna göre göster" hidden>
         <button type="button" role="radio" data-game="all">Tümü</button>
         <button type="button" role="radio" data-game="lol">League</button>
         <button type="button" role="radio" data-game="valorant">VALORANT</button>
       </div>
+      <div id="tools" class="tools">
+        <select id="sort" aria-label="Sıralama">
+          <option value="manual">Kendi sıram</option>
+          <option value="name">Ada göre</option>
+          <option value="rank">Ranka göre</option>
+          <option value="level">Seviyeye göre</option>
+          <option value="recent">Son kullanılana göre</option>
+        </select>
+        <div id="layout" class="seg icons" role="radiogroup" aria-label="Görünüm">
+          <button type="button" role="radio" data-layout="cards" title="Kartlar" aria-label="Kartlar"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><rect x="9" y="9" width="5" height="5" rx="1.2"/></svg></button>
+          <button type="button" role="radio" data-layout="rows" title="Satırlar" aria-label="Satırlar"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="2" y="3" width="12" height="2.4" rx="1.2"/><rect x="2" y="6.8" width="12" height="2.4" rx="1.2"/><rect x="2" y="10.6" width="12" height="2.4" rx="1.2"/></svg></button>
+        </div>
+      </div>
+      <button id="add" type="button" class="primary">Hesap ekle</button>
     </header>
 
     <div id="update" class="banner accent" hidden>
@@ -41,26 +99,9 @@
     <main>
       <ul id="accounts" aria-label="Hesaplar"></ul>
     </main>
-
-    <div id="message" role="status" hidden>
-      <p id="message-text"></p>
-      <button id="message-action" type="button" hidden></button>
-    </div>
-
-    <footer>
-      <button id="add" type="button" class="primary">Hesap ekle</button>
-      <span class="spacer"></span>
-      <svg class="lock-mark" id="footer-lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-label="Uygulama kilidi açık" role="img"><path class="shackle" d="M5 7V5a3 3 0 0 1 6 0v2"/><rect x="3" y="7" width="10" height="7" rx="2" fill="currentColor" stroke="none"/></svg>
-      <button id="settings" type="button" class="link">
-        <svg class="gear" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg>
-        Ayarlar
-        <span id="settings-dot" class="dot-badge" hidden></span>
-      </button>
-    </footer>
   </section>
 
-  <!-- One account's settings -->
-  <section id="view-edit" class="view" hidden>
+<section id="view-edit" class="view" hidden>
     <header class="titlebar">
       <button id="edit-back" type="button" class="link">‹ Geri</button>
       <h1 id="edit-title"></h1>
@@ -84,6 +125,10 @@
         </span>
       </label>
 
+      <label>Not
+        <input id="edit-note" type="text" maxlength="200" placeholder="Bu hesap hakkında kısa bir not" autocomplete="off">
+      </label>
+
       <fieldset>
         <legend>Otomatik giriş (isteğe bağlı)</legend>
         <p class="hint" id="edit-cred-state"></p>
@@ -93,6 +138,11 @@
           <button id="edit-cred-save" type="button">Şifreyi kaydet</button>
           <button id="edit-cred-clear" type="button">Kayıtlı şifreyi sil</button>
         </span>
+        <div id="edit-copy" class="step" hidden>
+          <p class="hint">Kayıtlı şifreyi panoya kopyalayabilirsin. Pano geçmişine girmez ve 30 saniye sonra panodan silinir; bu sürede yapıştırdığın her yer şifreyi görür.</p>
+          <input id="edit-copy-master" type="password" placeholder="Ana şifre" autocomplete="off" hidden>
+          <button id="edit-copy-go" type="button">Şifreyi kopyala</button>
+        </div>
       </fieldset>
 
       <button id="edit-shortcut" type="button">Masaüstü kısayolu oluştur</button>
@@ -101,8 +151,7 @@
     </main>
   </section>
 
-  <!-- Add-account wizard -->
-  <section id="view-wizard" class="view" hidden>
+<section id="view-wizard" class="view" hidden>
     <header class="titlebar">
       <button id="wiz-close" type="button" class="link">‹ Vazgeç</button>
       <h1>Hesap ekle</h1>
@@ -163,13 +212,11 @@
     </main>
   </section>
 
-  <!-- Settings -->
-  <section id="view-settings" class="view" hidden>
+<section id="view-settings" class="view" hidden>
     <header class="titlebar">
-      <button id="set-back" type="button" class="link">‹ Geri</button>
       <h1>Ayarlar</h1>
     </header>
-    <main class="form">
+    <main class="form cols">
       <div class="card">
         <div class="row-between">
           <h2>QuickSwitch <span id="set-version" class="muted"></span></h2>
@@ -192,20 +239,11 @@
         <p class="hint">Kutuya tıklayıp yeni tuşlara bas. Her programın üstünde çalışır.</p>
       </div>
 
-      <button id="set-security" type="button" class="nav-row">
-        <span>
-          <b>Güvenlik ve veriler</b>
-          <span id="set-security-text" class="hint"></span>
-        </span>
-        <span aria-hidden="true">›</span>
-      </button>
-
       <p id="set-message" class="hint" role="status"></p>
     </main>
   </section>
 
-  <!-- Unlock prompt -->
-  <section id="view-unlock" class="view" hidden>
+<section id="view-unlock" class="view" hidden>
     <header class="titlebar">
       <button id="unlock-back" type="button" class="link">‹ Geri</button>
       <h1>Kilidi aç</h1>
@@ -221,19 +259,81 @@
     </main>
   </section>
 
-  <!-- Security: what is stored, how, and the controls over it -->
-  <section id="view-security" class="view" hidden>
+<section id="view-data" class="view" hidden>
     <header class="titlebar">
-      <button id="sec-back" type="button" class="link">‹ Ayarlar</button>
+      <h1>Taşı ve yedekle</h1>
+    </header>
+    <main class="form cols">
+      <p id="data-message" class="hint" role="status"></p>
+
+      <div class="card">
+        <h2>Şifreli yedek</h2>
+        <p class="hint">Bütün hesaplar, kayıtlı şifreleri, notları ve kısayollarıyla tek bir dosyaya yazılır. Dosya yalnızca belirlediğin parolayla açılır ve başka bir bilgisayarda geri yüklenebilir. Kayıtlı oturumlar yedeğe girmez; şifresi olmayan hesaplara yeni bilgisayarda bir kez elle giriş yaparsın.</p>
+        <input id="data-master" type="password" placeholder="Ana şifre (uygulama kilidi açık)" autocomplete="off" hidden>
+        <input id="data-backup-pass" type="password" placeholder="Yedek parolası (en az 8 karakter)" autocomplete="new-password">
+        <input id="data-backup-pass2" type="password" placeholder="Yedek parolası, tekrar" autocomplete="new-password">
+        <button id="data-backup" type="button" class="primary">Yedek al</button>
+        <p class="hint">Yedek parolası unutulursa dosya açılamaz.</p>
+      </div>
+
+      <div class="card">
+        <h2>Yedekten geri yükle</h2>
+        <input id="data-restore-pass" type="password" placeholder="Yedek parolası" autocomplete="off">
+        <button id="data-restore" type="button">Yedek dosyası seç</button>
+        <input id="data-restore-file" type="file" accept=".qsbackup,.json,application/json" hidden>
+        <div id="data-restore-confirm" class="step" hidden>
+          <p id="data-restore-preview"></p>
+          <span class="row">
+            <button id="data-restore-go" type="button" class="primary">Ekle</button>
+            <button id="data-restore-cancel" type="button">Vazgeç</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Toplu ekle</h2>
+        <p class="hint">Her satıra bir hesap: <code>kullanıcıadı--şifre</code> ya da <code>kullanıcıadı--Ad#ETİKET--şifre</code>.</p>
+        <textarea id="data-bulk" rows="5" spellcheck="false" autocomplete="off" placeholder="kullanici1--Oyuncu Bir#TR1--sifre1&#10;kullanici2--sifre2"></textarea>
+        <p id="data-bulk-preview" class="hint"></p>
+        <button id="data-bulk-go" type="button" disabled>Ekle</button>
+      </div>
+
+      <div class="card">
+        <h2>League Accounts'tan içe aktar</h2>
+        <p class="hint">League Accounts uygulamasının dışa aktardığı JSON dosyasındaki hesapları, şifreleriyle birlikte buraya ekler. Zaten kayıtlı olan kullanıcı adları atlanır.</p>
+        <p class="hint">O dosyada şifreler açık yazılıdır. İçe aktardıktan sonra dosyayı sil.</p>
+        <button id="sec-import" type="button">Dosya seç</button>
+        <input id="sec-import-file" type="file" accept=".json,application/json" hidden>
+      </div>
+
+      <div class="card warn">
+        <h2>Açık dışa aktarma</h2>
+        <p class="hint">Şifresi kayıtlı hesapları, League Accounts'un okuyabildiği bir JSON dosyasına yazar. <b>Bu dosyada şifreler açık yazılıdır:</b> dosyayı açabilen herkes bütün hesaplarına girebilir. Yalnızca başka bir uygulamaya taşımak için kullan, işin bitince dosyayı sil. Yedek için yukarıdaki şifreli yedeği kullan.</p>
+        <label>Bölgesi bilinmeyen hesaplar için bölge
+          <select id="data-plain-region">
+            <option value="tr">TR</option><option value="euw">EUW</option><option value="eune">EUNE</option><option value="na">NA</option>
+            <option value="kr">KR</option><option value="br">BR</option><option value="jp">JP</option><option value="oce">OCE</option>
+            <option value="ru">RU</option><option value="lan">LAN</option><option value="las">LAS</option><option value="me">ME</option>
+            <option value="sea">SEA</option><option value="tw">TW</option><option value="vn">VN</option>
+          </select>
+        </label>
+        <label class="check"><input id="data-plain-ok" type="checkbox"> Şifrelerin dosyaya açık yazılacağını anladım.</label>
+        <button id="data-plain" type="button" class="danger" disabled>Açık şifreli dosya oluştur</button>
+      </div>
+    </main>
+  </section>
+
+<section id="view-security" class="view" hidden>
+    <header class="titlebar">
       <h1>Güvenlik</h1>
     </header>
-    <main class="form">
+    <main class="form cols">
       <div class="card">
         <h2>Verilerin bu bilgisayarda kalır</h2>
         <ul>
           <li id="sec-net"></li>
           <li>Kayıtlı oturumlar, şifreler ve hesap listesi Windows hesabına bağlı şifrelenir. Başka bir kullanıcı ya da başka bir bilgisayar bu dosyaları açamaz.</li>
-          <li>Kaydettiğin şifre bir daha ekranda gösterilmez; yalnızca Riot Client'ın giriş penceresine yazılır.</li>
+          <li>Kaydettiğin şifre ekranda gösterilmez. Uygulamadan yalnızca sen istediğinde çıkar: panoya kopyaladığında ya da dışa aktardığında. Uygulama kilidi açıksa bunların her biri ana şifreyi yeniden sorar.</li>
         </ul>
       </div>
 
@@ -284,6 +384,41 @@
       <p id="sec-message" class="hint" role="status"></p>
     </main>
   </section>
+
+  <!-- The diagnostic log, readable without leaving the app -->
+  <section id="view-log" class="view" hidden>
+    <header class="titlebar">
+      <h1>Tanı kaydı</h1>
+      <span class="spacer"></span>
+      <button id="log-refresh" type="button">Yenile</button>
+      <button id="log-copy" type="button" class="primary">Kopyala</button>
+    </header>
+    <main class="form">
+      <p class="hint">Bir şey beklediğin gibi çalışmadığında nedenini bu satırlar söyler. Hesap adı, kullanıcı adı, şifre ya da oturum bilgisi içermez; olduğu gibi paylaşabilirsin.</p>
+      <p id="log-message" class="hint" role="status"></p>
+      <ol id="log-lines" class="log" aria-label="Kayıt satırları"></ol>
+    </main>
+  </section>
+
+  <!-- Something to tell the user, wherever they are -->
+  <div id="message" role="status" hidden>
+    <p id="message-text"></p>
+    <button id="message-action" type="button" hidden></button>
+  </div>
+
+  <!-- The line a switch travels along, one station per step -->
+  <div id="track" hidden aria-live="polite">
+    <div class="track-who">
+      <b id="track-name"></b>
+      <span id="track-text"></span>
+    </div>
+    <ol id="track-stations"></ol>
+    <span id="track-time" class="track-time"></span>
+    <button id="track-cancel" type="button">İptal</button>
+    <button id="track-close" type="button" class="link" aria-label="Kapat" hidden>✕</button>
+  </div>
+  </div>
+</div>
 
   <!-- The seal: a padlock that closes while something is encrypted -->
   <div id="seal" hidden role="status" aria-live="polite">

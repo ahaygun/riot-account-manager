@@ -1,6 +1,8 @@
 //! The switching logic itself.
 
-use crate::api::{ClientApi, Identity, LoginState};
+mod portable;
+
+use crate::api::{AuthProblem, ClientApi, Identity, LoginState};
 use crate::identity::{self, FileSession};
 use crate::procs::Procs;
 use crate::snapshot::{self, Snapshot};
@@ -41,6 +43,19 @@ pub enum Error {
     Locked,
     WrongPassword,
     WeakPassword,
+    /// The file given for import is not a list of accounts we can read.
+    BadImport,
+    /// Riot Client runs, or has to run, as administrator; this app does
+    /// not, so it can neither start nor close it.
+    RiotElevated,
+    /// The password for a backup file is too short to protect it.
+    WeakBackupPassword,
+    /// The file is not a backup this app wrote.
+    BadBackup,
+    /// The backup did not open: wrong password, or a damaged file.
+    BackupNotOpened,
+    /// Nothing that could be exported.
+    NothingToExport,
 }
 
 impl From<VaultError> for Error {
@@ -71,6 +86,12 @@ impl Error {
             Error::Locked => "locked",
             Error::WrongPassword => "wrong_password",
             Error::WeakPassword => "weak_password",
+            Error::BadImport => "bad_import",
+            Error::RiotElevated => "riot_elevated",
+            Error::WeakBackupPassword => "weak_backup_password",
+            Error::BadBackup => "bad_backup",
+            Error::BackupNotOpened => "backup_not_opened",
+            Error::NothingToExport => "nothing_to_export",
         }
     }
 }
@@ -103,6 +124,15 @@ impl fmt::Display for Error {
             Error::Locked => write!(f, "Uygulama kilitli. Devam etmek için kilidi aç."),
             Error::WrongPassword => write!(f, "Ana şifre yanlış."),
             Error::WeakPassword => write!(f, "Ana şifre en az {} karakter olmalı.", vault::MIN_PASSWORD_LEN),
+            Error::BadImport => write!(f, "Bu dosya okunamadı. League Accounts'un dışa aktardığı JSON dosyasını seç."),
+            Error::RiotElevated => write!(
+                f,
+                "Riot Client yönetici olarak çalışıyor ya da öyle çalışmak istiyor; QuickSwitch onu başlatamaz ve kapatamaz. Riot Client'ın kısayolundaki \"Yönetici olarak çalıştır\" ayarını kaldır."
+            ),
+            Error::WeakBackupPassword => write!(f, "Yedek parolası en az {} karakter olmalı.", vault::MIN_PASSWORD_LEN),
+            Error::BadBackup => write!(f, "Bu dosya bir QuickSwitch yedeği değil."),
+            Error::BackupNotOpened => write!(f, "Yedek açılamadı: parola yanlış ya da dosya bozulmuş."),
+            Error::NothingToExport => write!(f, "Dışa aktarılacak hesap yok."),
         }
     }
 }
@@ -238,6 +268,16 @@ pub enum LoginOutcome {
     Unknown,
 }
 
+/// What an import did, or would do, in numbers of accounts.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct Imported {
+    pub added: usize,
+    /// Left out: the account is already stored, or came twice.
+    pub already_here: usize,
+    /// Left out: no username or no password where one was needed.
+    pub incomplete: usize,
+}
+
 /// Wiped from memory as soon as it goes out of scope.
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 struct Credentials {
@@ -289,6 +329,10 @@ pub struct Switcher {
     pub ask_for_focus: Arc<dyn Fn(bool) + Send + Sync>,
     /// The time in Unix seconds. Tests move it to age a session.
     pub clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+    /// Told what a switch is doing, as it moves along, and for which
+    /// account: "closing", "restoring", "starting", "waiting",
+    /// "signing_in", "verifying", "game".
+    pub on_step: Arc<dyn Fn(&'static str, &str) + Send + Sync>,
     vault: Vault,
     /// Serialises read-modify-write of the account list across threads.
     state_lock: Mutex<()>,
@@ -332,6 +376,7 @@ impl Switcher {
             kdf: KdfParams::default(),
             ask_for_focus: Arc::new(|_| {}),
             clock: Arc::new(system_now),
+            on_step: Arc::new(|_, _| {}),
             vault,
             state_lock: Mutex::new(()),
             idle_seen: Mutex::new(None),
@@ -344,6 +389,12 @@ impl Switcher {
 
     fn now(&self) -> u64 {
         (self.clock)()
+    }
+
+    /// Starts Riot Client. Windows refuses with error 740 when the program
+    /// is set to run as administrator and we are not: said as what it is.
+    fn launch(&self, exe: &std::path::Path, args: &[String]) -> Result<()> {
+        self.procs.launch(exe, args).map_err(|e| if e.raw_os_error() == Some(740) { Error::RiotElevated } else { Error::Io(e) })
     }
 
     // ---- storage -----------------------------------------------------------
@@ -783,7 +834,7 @@ impl Switcher {
         let _ = self.keep_live_session(&cfg, seen.as_ref());
         self.update(|state| state.current = None)?;
         snapshot::clear(&self.env.riot_games_dir, &cfg.session_paths)?;
-        self.procs.launch(&exe, &Game::Client.launch_args())?;
+        self.launch(&exe, &Game::Client.launch_args())?;
         Ok(())
     }
 
@@ -810,13 +861,15 @@ impl Switcher {
         // Already this account: no need to close anything.
         if owner(&state, &live).is_some_and(|a| a.id == account.id) {
             if live.signed_in() {
+                (self.on_step)("game", &account.id);
                 if game != Game::Client && !self.api.start_product(game.product()) {
-                    self.procs.launch(&exe, &game.launch_args())?;
+                    self.launch(&exe, &game.launch_args())?;
                 }
                 return Ok(Switched { account, game, watch_login: false });
             }
             if !live.running {
-                self.procs.launch(&exe, &game.launch_args())?;
+                (self.on_step)("starting", &account.id);
+                self.launch(&exe, &game.launch_args())?;
                 return Ok(Switched { account, game, watch_login: true });
             }
         }
@@ -827,12 +880,14 @@ impl Switcher {
         let snap = self.read_snapshot(&account.id)?;
 
         let started = Instant::now();
+        (self.on_step)("closing", &account.id);
         self.close_client(&cfg)?;
         let closed = started.elapsed();
         // Keep the outgoing account's latest session. Best effort: a
         // failure here must not block the switch.
         let _ = self.keep_live_session(&cfg, live.identity.as_ref());
 
+        (self.on_step)("restoring", &account.id);
         // `current` is cleared while the files are in flux, so nothing can
         // file one account's session under another.
         self.update(|state| state.current = None)?;
@@ -843,7 +898,8 @@ impl Switcher {
         }
         self.update(|state| state.current = Some(account.id.clone()))?;
 
-        self.procs.launch(&exe, &game.launch_args())?;
+        (self.on_step)("starting", &account.id);
+        self.launch(&exe, &game.launch_args())?;
         self.log(&format!(
             "switch: client closed in {} ms, session files swapped in {} ms ({})",
             closed.as_millis(),
@@ -868,6 +924,7 @@ impl Switcher {
         let grace = t.signed_out_grace;
 
         // 1. Wait for the client to answer at all.
+        (self.on_step)("waiting", id);
         let start = Instant::now();
         while self.api.login() == LoginState::Unknown {
             if cancelled() || start.elapsed() > t.boot_wait {
@@ -936,6 +993,7 @@ impl Switcher {
             cancelled,
             log: &log,
         };
+        (self.on_step)("signing_in", id);
         let typed = {
             let _typing = Typing::start(&self.typing_for, id);
             self.typer.type_login(&creds.username, &creds.password, &target)
@@ -949,6 +1007,32 @@ impl Switcher {
         while typed_at.elapsed() < t.login_wait {
             if cancelled() {
                 return Ok(LoginOutcome::Unknown);
+            }
+            // What Riot says about the sign-in decides what happens next.
+            match self.api.auth_problem() {
+                // A code is wanted: only the user can give it. The sign-in
+                // by hand that follows is watched for by the caller.
+                Some(AuthProblem::Verification) => {
+                    self.log("switch: Riot asks for a verification code");
+                    (self.on_step)("verifying", id);
+                    self.set_needs_login(id, true)?;
+                    return Ok(LoginOutcome::NeedsLogin(
+                        "Riot doğrulama kodu istiyor. Kodu Riot Client penceresinde gir; giriş tamamlanınca kayıt kendiliğinden güncellenir.".into(),
+                    ));
+                }
+                Some(problem) => {
+                    self.log(&format!("switch: Riot refused the typed sign-in ({problem:?})"));
+                    self.set_needs_login(id, true)?;
+                    return Ok(LoginOutcome::NeedsLogin(
+                        match problem {
+                            AuthProblem::RateLimited => "Riot çok fazla giriş denemesi olduğunu söylüyor. Birkaç dakika bekleyip yeniden dene.",
+                            AuthProblem::Captcha => "Riot doğrulamayı (captcha) kabul etmedi. Riot Client penceresinde elle giriş yap.",
+                            _ => "Riot kullanıcı adını ya da şifreyi kabul etmedi. Hesabın ayarlarından kayıtlı şifreyi güncelle.",
+                        }
+                        .into(),
+                    ));
+                }
+                None => {}
             }
             // Still plainly signed out a while after Enter: it may not have
             // been taken. Once more, and only once, so a wrong password is
@@ -1011,6 +1095,10 @@ impl Switcher {
             acc.last_ok = self.now();
             acc.puuid = acc.puuid.take().or(seen.puuid.clone());
             acc.riot_id = seen.riot_id.clone().or(acc.riot_id.take());
+            // Only when the client said who this is: no answer is not "no ban".
+            if seen.puuid.is_some() {
+                acc.ban = seen.ban;
+            }
             Ok(Some(acc.game))
         })?;
         if game.is_none() && from_saved {
@@ -1018,6 +1106,7 @@ impl Switcher {
         }
         let Some(own_game) = game else { return Ok(LoginOutcome::Unknown) };
         let game = started.unwrap_or(own_game);
+        (self.on_step)("game", id);
 
         // After a typed login the client often stays on its home page
         // instead of starting the game it was launched for; nudge it once.
@@ -1153,6 +1242,37 @@ impl Switcher {
     }
 
     /// Stores the login used when the saved session has expired.
+    /// A few words about the account, shown in the list. Cut to 200 characters.
+    pub fn set_note(&self, id: &str, note: &str) -> Result<()> {
+        let note: String = note.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect();
+        self.update_account(id, |acc, _| {
+            acc.note = note;
+            Ok(())
+        })
+    }
+
+    /// Before a stored password leaves the app (to the clipboard or into a
+    /// file): with the app lock on, the master password is asked for again,
+    /// even while the app is open. Someone at an unattended, unlocked
+    /// computer can switch accounts, but cannot carry the passwords away.
+    fn confirm_master(&self, master: Option<&str>) -> Result<()> {
+        self.ensure_unlocked()?;
+        if self.vault.enabled() && self.vault.check(master.unwrap_or_default())?.is_none() {
+            return Err(Error::WrongPassword);
+        }
+        Ok(())
+    }
+
+    /// The stored password of an account, for the clipboard. See `confirm_master`.
+    pub fn password_for_clipboard(&self, id: &str, master: Option<&str>) -> Result<Zeroizing<String>> {
+        self.confirm_master(master)?;
+        let state = self.state()?;
+        let account = find(&state, id).ok_or_else(|| Error::UnknownAccount(id.to_string()))?;
+        let creds = self.credentials(&account.id).ok_or(Error::EmptyField("Şifre"))?;
+        self.log("export: a password was copied to the clipboard");
+        Ok(Zeroizing::new(creds.password.clone()))
+    }
+
     pub fn set_credentials(&self, id: &str, username: &str, password: &str) -> Result<()> {
         if find(&self.state()?, id).is_none() {
             return Err(Error::UnknownAccount(id.to_string()));
@@ -1188,6 +1308,28 @@ impl Switcher {
         }
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
             let _ = writeln!(f, "{} {line}", self.now());
+        }
+    }
+
+    /// The end of `quickswitch.log`, for showing in the app: at most
+    /// `max_bytes` of it, cut at a line start. Empty when there is none yet.
+    pub fn log_tail(&self, max_bytes: u64) -> String {
+        use std::io::{Read, Seek, SeekFrom};
+        let Ok(mut file) = std::fs::File::open(self.env.data_dir.join("quickswitch.log")) else { return String::new() };
+        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let cut = len > max_bytes;
+        if cut && file.seek(SeekFrom::Start(len - max_bytes)).is_err() {
+            return String::new();
+        }
+        let mut bytes = Vec::new();
+        if file.read_to_end(&mut bytes).is_err() {
+            return String::new();
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        // The first line is likely a torn one when the start was skipped.
+        match (cut, text.find('\n')) {
+            (true, Some(at)) => text[at + 1..].to_string(),
+            _ => text.into_owned(),
         }
     }
 

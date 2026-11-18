@@ -53,9 +53,35 @@ Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 
 - Riot ID, tek/çift sıralama ligi ve seviye: League istemcisi o hesapla açıkken okunur ve hatırlanır.
 - **N gündür açılmadı:** hesabın oturumu en az 7 gündür kullanılmadı. Riot kullanılmayan oturumları bir süre sonra sonlandırır; süreyi açıklamaz. Hesaba geçince oturum hâlâ geçerliyse uyarı kalkar. Eşik `config.json` içindeki `stale_after_days` ile değişir, 0 uyarıyı kapatır.
+- **ban: N gün / kalıcı ban:** Riot son girişte bu hesap için League banı bildirdi. Giriş yine yapılır; ban bitene kadar oyun açılırsa bağlantı kesilir. Hesaba banı kalkmış halde girince etiket kalkar.
+- **Not:** hesap ayarlarında yazdığın kısa not satırın altında görünür; arama notlarda da arar.
+- **Sıra ve görünüm:** hesaplar ada, ranka, seviyeye ya da son kullanıma göre gösterilebilir; sürükleyerek sıralama yalnızca "Kendi sıram" seçiliyken çalışır. Görünüm kartlar ya da satırlar olarak seçilir.
+- **Soldaki sayılar:** giriş gerektiren, banlı ve uzun süredir açılmayan hesapları sayar; bir sayıya tıklamak listeyi ona indirir.
 - **giriş gerekli:** kayıtlı oturum son denemede kabul edilmedi. Şifre kayıtlıysa otomatik girilir; değilse Riot Client'ta "Oturumu açık tut" ile bir kez elle gir, kayıt kendiliğinden yenilenir.
 
-**Ayarlar** (sağ alttaki dişli): sürüm ve güncellemeler, Windows açılınca tepside başlatma, pencereyi açan kısayol, güvenlik ve veriler.
+## Pencere
+
+Solda bölümler durur: **Hesaplar**, **Taşı ve yedekle**, **Güvenlik**, **Tanı kaydı**, **Ayarlar**. Altında kilit açıksa kilitleme düğmesi ve sürüm.
+
+Bir hesaba geçerken pencerenin altında **geçiş hattı** belirir: Riot Client'ın kapanması, oturumun yerine konması, istemcinin açılması, girişin kabulü, gerekiyorsa şifreyle giriş ve oyunun açılması birer durak olarak görünür. Geçilen duraklar yeşil, o anki durak sarıdır; bir şey durursa hangi durakta durduğu kırmızı kalır. Giriş takibi **İptal** ile bırakılabilir.
+
+**Tanı kaydı** bölümü `quickswitch.log` dosyasının son satırlarını saatleriyle gösterir, sorun bildiren satırları işaretler ve tek tıkla panoya kopyalar. Bir şey çalışmadığında paylaşılacak şey budur.
+
+**Ayarlar:** sürüm ve güncellemeler, Windows açılınca tepside başlatma, pencereyi açan kısayol.
+
+## Taşıma ve yedek
+
+Soldaki **Taşı ve yedekle** bölümünde:
+
+- **Şifreli yedek:** bütün hesaplar tek dosyaya, belirlediğin parolayla şifreli yazılır; başka bilgisayarda geri yüklenir. Kayıtlı oturumlar taşınmaz: şifresi kayıtlı hesaplar ilk geçişte şifreyle girer, diğerlerine bir kez elle giriş yaparsın.
+- **Toplu ekle:** her satıra bir hesap, `kullanıcıadı--şifre` ya da `kullanıcıadı--Ad#ETİKET--şifre`. Eklemeden önce kaç hesabın ekleneceği gösterilir.
+- **Açık dışa aktarma:** şifresi kayıtlı hesapları League Accounts'un okuduğu JSON olarak yazar. Şifreler açık yazılır; yalnızca taşımak için kullan ve işin bitince dosyayı sil.
+
+Hesap ayarlarında (⋯) kayıtlı şifreyi panoya kopyalayabilirsin; pano geçmişine girmez ve 30 saniye sonra silinir.
+
+## League Accounts'tan geçiş
+
+[League Accounts](https://github.com/Tariolle/LeagueAccounts) kullanan biri hesaplarını tek seferde taşıyabilir: orada dışa aktar, burada **Taşı ve yedekle → League Accounts'tan içe aktar** ile JSON dosyasını seç. Hesaplar şifreyle giren hesaplar olarak eklenir; ilk girişten sonra kayıtlı oturumla açılırlar. Zaten kayıtlı kullanıcı adları atlanır. Dışa aktarma dosyasında şifreler açık yazılıdır; içe aktardıktan sonra sil.
 
 ## Riot Client'ı elle kullanırken
 

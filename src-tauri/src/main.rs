@@ -30,6 +30,24 @@ const VIEW_TTL: Duration = Duration::from_secs(1);
 /// Set once the app is up; lets core callbacks reach the window.
 static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
+/// What a switch is doing right now, for the window to show.
+fn on_step(step: &'static str, account: &str) {
+    if let Some(app) = APP.get() {
+        let _ = app.emit("switch-step", Step { step, account: account.to_string() });
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct Step {
+    step: &'static str,
+    account: String,
+}
+
+/// The switch that was being followed is over, one way or another.
+fn step_over(app: &AppHandle, step: &'static str, account: &str) {
+    let _ = app.emit("switch-step", Step { step, account: account.to_string() });
+}
+
 /// Windows would not let us bring Riot Client forward for a typed login:
 /// ask the user to click it, and put the request away afterwards.
 fn ask_for_focus(on: bool) {
@@ -165,10 +183,19 @@ fn do_switch(app: &AppHandle, target: &str, game: Option<Game>, force: bool) -> 
         (shared.sw.switch_with(target, game, force), generation)
     };
     changed(app);
-    let switched = result?;
+    let switched = match result {
+        Ok(switched) => switched,
+        Err(e) => {
+            // Whatever steps were shown, the switch ends here.
+            step_over(app, "stopped", target);
+            return Err(e.into());
+        }
+    };
     *lock(&shared.pending) = None;
     if switched.watch_login {
         watch_login(app.clone(), switched.account.id.clone(), game, generation);
+    } else {
+        step_over(app, "done", &switched.account.id);
     }
     Ok(switched.account.name)
 }
@@ -196,6 +223,9 @@ fn watch_login(app: AppHandle, id: String, game: Option<Game>, generation: u64) 
             Ok(LoginOutcome::Unknown) => "not confirmed (cancelled or client closed)".to_string(),
             Err(e) => format!("failed: {}", e.kind()),
         }));
+        if !cancelled() {
+            step_over(&app, if matches!(outcome, Ok(LoginOutcome::SignedIn)) { "done" } else { "stopped" }, &id);
+        }
         match outcome {
             Ok(LoginOutcome::NeedsLogin(why)) => {
                 changed(&app);
@@ -289,6 +319,17 @@ fn cancel_queue(app: AppHandle) {
     changed(&app);
 }
 
+/// Stops following the sign-in of the last switch: no password is typed
+/// from here on and nothing more is waited for. Riot Client is left as it is.
+#[tauri::command(async)]
+fn cancel_switch(app: AppHandle) {
+    let shared = app.state::<Shared>();
+    shared.generation.fetch_add(1, Ordering::SeqCst);
+    shared.sw.log("switch: following the sign-in was cancelled by the user");
+    step_over(&app, "cancelled", "");
+    changed(&app);
+}
+
 /// Runs one operation that may close the client or move session files.
 fn exclusive<T>(app: &AppHandle, f: impl FnOnce(&Switcher) -> quickswitch_core::switcher::Result<T>) -> CmdResult<T> {
     touch(app);
@@ -324,6 +365,84 @@ fn capture_account(app: AppHandle, name: String, game: Game) -> CmdResult<String
 #[tauri::command(async)]
 fn add_with_password(app: AppHandle, name: String, username: String, password: String, game: Game) -> CmdResult<String> {
     edit(&app, |sw| sw.add_with_credentials(&name, &username, &password, game)).map(|a| a.id)
+}
+
+/// Adds the accounts of a file exported by League Accounts. The window
+/// hands over the file's text; it is not kept anywhere.
+#[tauri::command(async)]
+fn import_league_accounts(app: AppHandle, json: String) -> CmdResult<quickswitch_core::Imported> {
+    edit(&app, |sw| sw.import_league_accounts(&json))
+}
+
+/// The last part of the diagnostic log, for the window to show.
+#[tauri::command(async)]
+fn read_log(app: AppHandle) -> String {
+    app.state::<Shared>().sw.log_tail(96 * 1024)
+}
+
+#[tauri::command(async)]
+fn set_note(app: AppHandle, id: String, note: String) -> CmdResult<()> {
+    edit(&app, |sw| sw.set_note(&id, &note))
+}
+
+/// Adds accounts from pasted lines; with `dry_run` only says what would be added.
+#[tauri::command(async)]
+fn bulk_add(app: AppHandle, lines: String, dry_run: bool) -> CmdResult<quickswitch_core::Imported> {
+    edit(&app, |sw| sw.bulk_add(&lines, dry_run))
+}
+
+#[tauri::command(async)]
+fn import_backup(app: AppHandle, file: String, password: String, dry_run: bool) -> CmdResult<quickswitch_core::Imported> {
+    edit(&app, |sw| sw.import_backup(&file, &password, dry_run))
+}
+
+/// Writes `text` into the user's Downloads folder (the data folder if there
+/// is none) under a name that says when it was made, shows it in Explorer,
+/// and returns where it is.
+fn save_export(app: &AppHandle, stem: &str, extension: &str, text: &str) -> CmdResult<String> {
+    let dir = app.path().download_dir().unwrap_or_else(|_| app.state::<Shared>().sw.env.data_dir.clone());
+    std::fs::create_dir_all(&dir).map_err(|e| other(e.to_string()))?;
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let path = dir.join(format!("{stem}-{stamp}.{extension}"));
+    quickswitch_core::store::write_synced(&path, text.as_bytes()).map_err(|e| other(e.to_string()))?;
+    if cfg!(windows) {
+        let _ = std::process::Command::new("explorer.exe").arg("/select,").arg(&path).spawn();
+    }
+    Ok(path.display().to_string())
+}
+
+/// An encrypted backup of every account, opened only with `password`.
+#[tauri::command(async)]
+fn export_backup(app: AppHandle, master: Option<String>, password: String) -> CmdResult<String> {
+    touch(&app);
+    let file = app.state::<Shared>().sw.export_backup(master.as_deref(), &password)?;
+    save_export(&app, "QuickSwitch-yedek", "qsbackup", &file)
+}
+
+/// The accounts with their passwords in plain text, as League Accounts reads them.
+#[tauri::command(async)]
+fn export_plain(app: AppHandle, master: Option<String>, region: String) -> CmdResult<String> {
+    touch(&app);
+    let file = app.state::<Shared>().sw.export_plain(master.as_deref(), &region)?;
+    save_export(&app, "QuickSwitch-hesaplar-ACIK-SIFRELI", "json", &file)
+}
+
+/// How long a copied password stays on the clipboard.
+const CLIPBOARD_SECONDS: u64 = 30;
+
+/// Copies an account's password to the clipboard, kept out of the clipboard
+/// history, and takes it off again after `CLIPBOARD_SECONDS` unless
+/// something else was copied meanwhile. The password never reaches the window.
+#[tauri::command(async)]
+fn copy_password(app: AppHandle, id: String, master: Option<String>) -> CmdResult<u64> {
+    touch(&app);
+    let password = app.state::<Shared>().sw.password_for_clipboard(&id, master.as_deref())?;
+    let ticket = quickswitch_core::clipboard::set_private_text(&password).map_err(|e| other(format!("Panoya yazılamadı: {e}")))?;
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(CLIPBOARD_SECONDS));
+        quickswitch_core::clipboard::clear_if_still_ours(ticket);
+    });
+    Ok(CLIPBOARD_SECONDS)
 }
 
 #[tauri::command(async)]
@@ -731,6 +850,7 @@ fn main() {
     let api = Arc::new(LocalApi::new(env.riot_games_dir.clone()));
     let mut switcher = Switcher::new(env, Arc::new(SysProcs::default()), api, Arc::new(WindowTyper));
     switcher.ask_for_focus = Arc::new(ask_for_focus);
+    switcher.on_step = Arc::new(on_step);
 
     // The updater is only configured in release builds made with a signing
     // key (see .github/workflows/release.yml). Without that configuration
@@ -781,6 +901,15 @@ fn main() {
             begin_add,
             capture_account,
             add_with_password,
+            import_league_accounts,
+            read_log,
+            set_note,
+            bulk_add,
+            import_backup,
+            export_backup,
+            export_plain,
+            copy_password,
+            cancel_switch,
             remove_account,
             rename_account,
             reorder_accounts,

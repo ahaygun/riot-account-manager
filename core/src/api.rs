@@ -4,7 +4,7 @@
 //!
 //! Behind a trait so the switching logic can be tested without a client.
 
-use crate::store;
+use crate::store::{self, Ban};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -26,6 +26,22 @@ pub struct Identity {
     pub puuid: Option<String>,
     /// `Name#TAG`
     pub riot_id: Option<String>,
+    /// A League suspension still running, if Riot reports one.
+    pub ban: Option<Ban>,
+}
+
+/// Why a sign-in with a password is not going through, as far as Riot
+/// Client says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthProblem {
+    /// A verification code (2FA) is being asked for.
+    Verification,
+    /// Username or password refused.
+    Rejected,
+    /// Too many attempts; Riot wants a pause.
+    RateLimited,
+    /// The captcha was not passed.
+    Captcha,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -51,6 +67,11 @@ pub trait ClientApi: Send + Sync {
     /// Where the League client is in a match's life ("Lobby",
     /// "ChampSelect", "InProgress", ...), if it is running.
     fn league_phase(&self) -> Option<String>;
+    /// What stands in the way of a sign-in that was just sent, if the
+    /// client says. `None` both for "nothing" and for "does not say".
+    fn auth_problem(&self) -> Option<AuthProblem> {
+        None
+    }
 }
 
 /// Real implementation.
@@ -159,6 +180,50 @@ pub(crate) fn needs_legacy_status(rso_session: Option<&Value>) -> bool {
     kind.eq_ignore_ascii_case("authenticated") && rso_session.and_then(|v| v.get("persistLogin")).and_then(Value::as_bool).is_none()
 }
 
+/// The League suspension in the signed-in account's claims, if one is
+/// still running at `now_ms`. Chat and ranked restrictions are not bans:
+/// the account can still play. Of several, the one that ends last counts.
+pub(crate) fn league_ban(claims: &Value, now_ms: u64) -> Option<Ban> {
+    let mut found: Option<Ban> = None;
+    for r in claims.get("ban")?.get("restrictions")?.as_array()? {
+        if r.get("scope").and_then(Value::as_str) != Some("lol") {
+            continue;
+        }
+        let until = match r.get("type").and_then(Value::as_str) {
+            Some("PERMANENT_BAN") => None,
+            Some("TIME_BAN") => match r.get("dat").and_then(|d| d.get("expirationMillis")).and_then(Value::as_u64) {
+                Some(until) if until > now_ms => Some(until),
+                _ => continue,
+            },
+            _ => continue,
+        };
+        found = Some(match (found, until) {
+            (Some(Ban { until: None }), _) | (_, None) => Ban { until: None },
+            (Some(Ban { until: Some(other) }), Some(until)) => Ban { until: Some(other.max(until)) },
+            (None, until) => Ban { until },
+        });
+    }
+    found
+}
+
+/// Reads the authentication step Riot Client is at. A request for a code
+/// shows as its `type`; a refusal shows as an `error` text, sorted here by
+/// the words it carries.
+pub(crate) fn auth_problem_from(answer: &Value) -> Option<AuthProblem> {
+    let error = answer.get("error").and_then(Value::as_str).unwrap_or_default().to_lowercase();
+    if error.contains("captcha") {
+        Some(AuthProblem::Captcha)
+    } else if error.contains("rate") {
+        Some(AuthProblem::RateLimited)
+    } else if !error.is_empty() {
+        Some(AuthProblem::Rejected)
+    } else if answer.get("type").and_then(Value::as_str).is_some_and(|t| t.eq_ignore_ascii_case("multifactor")) {
+        Some(AuthProblem::Verification)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn login_from(rso_session: Option<&Value>, legacy_status: Option<&Value>) -> LoginState {
     let legacy_persist = legacy_status.and_then(|v| v.get("persist")).and_then(Value::as_bool);
     if let Some(kind) = rso_session.and_then(|v| v.get("type")).and_then(Value::as_str) {
@@ -257,11 +322,18 @@ impl ClientApi for LocalApi {
             None => userinfo,
         };
         let alias = get(&access, "/player-account/aliases/v1/active").ok().flatten().unwrap_or(Value::Null);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
         let id = Identity {
             puuid: text(&claims, "sub"),
             riot_id: riot_id(text(&alias, "game_name"), text(&alias, "tag_line")),
+            ban: league_ban(&claims, now),
         };
         (id != Identity::default()).then_some(id)
+    }
+
+    fn auth_problem(&self) -> Option<AuthProblem> {
+        let answer = get(&self.riot()?, "/rso-authenticator/v1/authentication").ok().flatten()?;
+        auth_problem_from(&answer)
     }
 
     fn quit(&self) -> bool {
@@ -328,6 +400,42 @@ mod tests {
         assert!(needs_legacy_status(Some(&json!({"type": "authenticated"}))));
         assert!(needs_legacy_status(Some(&json!({}))));
         assert!(needs_legacy_status(None));
+    }
+
+    #[test]
+    fn league_bans_are_read_and_other_restrictions_are_not() {
+        let now = 1_000_000;
+        let claims = |list: Value| json!({"sub": "x", "ban": {"restrictions": list}});
+        assert_eq!(league_ban(&json!({"sub": "x"}), now), None);
+        assert_eq!(league_ban(&claims(json!([])), now), None);
+        // Over, another game's, and a chat restriction: none of them a ban.
+        let not_bans = json!([
+            {"scope": "lol", "type": "TIME_BAN", "dat": {"expirationMillis": 999_999}},
+            {"scope": "valorant", "type": "PERMANENT_BAN"},
+            {"scope": "lol", "type": "TEXT_CHAT_MUTED", "dat": {"expirationMillis": 9_000_000}}
+        ]);
+        assert_eq!(league_ban(&claims(not_bans), now), None);
+        // The later of two; a permanent one beats both.
+        let two = json!([
+            {"scope": "lol", "type": "TIME_BAN", "dat": {"expirationMillis": 2_000_000}},
+            {"scope": "lol", "type": "TIME_BAN", "dat": {"expirationMillis": 5_000_000}}
+        ]);
+        assert_eq!(league_ban(&claims(two), now), Some(Ban { until: Some(5_000_000) }));
+        let with_permanent = json!([
+            {"scope": "lol", "type": "PERMANENT_BAN"},
+            {"scope": "lol", "type": "TIME_BAN", "dat": {"expirationMillis": 5_000_000}}
+        ]);
+        assert_eq!(league_ban(&claims(with_permanent), now), Some(Ban { until: None }));
+    }
+
+    #[test]
+    fn what_stands_in_the_way_of_a_sign_in() {
+        assert_eq!(auth_problem_from(&json!({"type": "auth", "error": ""})), None);
+        assert_eq!(auth_problem_from(&json!({})), None);
+        assert_eq!(auth_problem_from(&json!({"type": "multifactor"})), Some(AuthProblem::Verification));
+        assert_eq!(auth_problem_from(&json!({"type": "auth", "error": "auth_failure"})), Some(AuthProblem::Rejected));
+        assert_eq!(auth_problem_from(&json!({"error": "rate_limited"})), Some(AuthProblem::RateLimited));
+        assert_eq!(auth_problem_from(&json!({"error": "captcha_not_allowed"})), Some(AuthProblem::Captcha));
     }
 
     #[test]

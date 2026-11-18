@@ -123,6 +123,48 @@ fn rand_bytes<const N: usize>() -> [u8; N] {
     out
 }
 
+/// A file that can leave this computer: `plain` encrypted under a password
+/// alone, without the Windows account's key that everything on disk has.
+/// Text, so it survives being mailed or pasted.
+#[derive(Serialize, Deserialize)]
+struct Portable {
+    /// Says what the file is; checked on the way in.
+    quickswitch_backup: u32,
+    salt: String,
+    kdf: KdfParams,
+    data: String,
+}
+
+pub fn seal_portable(password: &str, plain: &[u8], kdf: KdfParams) -> io::Result<String> {
+    let salt: [u8; 16] = rand_bytes();
+    let key = derive(password, &salt, kdf)?;
+    let file = Portable { quickswitch_backup: 1, salt: hex(&salt), kdf, data: hex(&encrypt(&key, plain)?) };
+    serde_json::to_string(&file).map_err(io::Error::other)
+}
+
+/// Why a portable file did not open.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PortableError {
+    /// Not a file `seal_portable` wrote.
+    NotABackup,
+    /// The password is wrong, or the file was changed; the two cannot be
+    /// told apart, by design.
+    WrongPasswordOrDamaged,
+}
+
+pub fn open_portable(password: &str, text: &str) -> Result<Zeroizing<Vec<u8>>, PortableError> {
+    let file: Portable = serde_json::from_str(text).map_err(|_| PortableError::NotABackup)?;
+    // A file may ask for more work than ours do, within reason: one that
+    // asks for gigabytes of memory is not opened at all.
+    if file.quickswitch_backup != 1 || file.kdf.memory_kib > 1024 * 1024 || file.kdf.passes > 16 {
+        return Err(PortableError::NotABackup);
+    }
+    let salt = unhex(&file.salt).map_err(|_| PortableError::NotABackup)?;
+    let data = unhex(&file.data).map_err(|_| PortableError::NotABackup)?;
+    let key = derive(password, &salt, file.kdf).map_err(|_| PortableError::NotABackup)?;
+    decrypt(&key, &data).map(Zeroizing::new).map_err(|_| PortableError::WrongPasswordOrDamaged)
+}
+
 /// Seals `plain` for disk with an explicit key choice (used while changing
 /// the lock, when old and new keys both exist).
 pub fn seal_with(key: Option<&MasterKey>, plain: &[u8]) -> io::Result<Vec<u8>> {

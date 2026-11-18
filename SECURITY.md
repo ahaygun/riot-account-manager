@@ -34,10 +34,20 @@ Her şey `%LOCALAPPDATA%\QuickSwitch\` içinde durur. `Roaming` yerine `Local` s
 ## Şifreler
 
 - Şifre kaydetmek isteğe bağlıdır. Önerilen yol oturumla eklemektir; o yolda şifre hiç saklanmaz.
-- Kaydedilen şifre arayüze geri gönderilmez ve gösterilmez.
+- Kaydedilen şifre arayüze geri gönderilmez ve gösterilmez. Uygulamadan yalnızca kullanıcının açık isteğiyle, aşağıdaki "Şifrenin uygulamadan çıktığı yollar" bölümündeki üç yoldan biriyle çıkar.
 - Şifre önce Riot Client penceresindeki giriş alanına doğrudan (Windows UI Automation ile) yazılır. Pencere, adı eşleşen **ve** çalıştırılabilir dosyası Riot Client kurulum klasöründe olan bir sürece aittir; alanların da o süreçlere ait olduğu ayrıca denetlenir. Bu yolda klavye kullanılmaz, yani şifre başka bir pencereye gidemez.
 - Sayfa bunu kabul etmezse alanlar boşaltılır ve şifre klavye girişi olarak yazılır. Yazmadan önce ve her adımda öndeki pencerenin aynı koşulları sağlayan bir sürece ait olduğu denetlenir. Değilse yazma durur.
-- Şifre komut satırına, günlük dosyasına ya da panoya yazılmaz; bellekteki kopyası iş bitince silinir.
+- Şifre komut satırına ya da günlük dosyasına yazılmaz; bellekteki kopyası iş bitince silinir. Bunu bir test de denetler: bütün akışlar tanınabilir sahte ad, kullanıcı adı, şifre ve token ile çalıştırılır ve günlükte hiçbirinin geçmediği doğrulanır.
+
+## Şifrenin uygulamadan çıktığı yollar
+
+Üçü de yalnızca kullanıcı istediğinde çalışır. Uygulama kilidi açıksa üçü de, uygulama o an açık olsa bile, ana şifreyi yeniden sorar: başında durulmayan açık bir bilgisayarda hesap değiştirilebilir ama şifreler alınıp götürülemez.
+
+- **Şifreyi kopyala.** Şifre arayüze uğramadan panoya yazılır. Pano kaydı Windows pano geçmişine ve cihazlar arası eşitlemeye girmeyecek biçimde işaretlenir ve 30 saniye sonra, araya başka bir kopyalama girmediyse silinir. O 30 saniye içinde panoyu okuyan her program şifreyi görebilir.
+- **Şifreli yedek.** Bütün hesaplar, kayıtlı şifreleri, notları ve kısayollarıyla tek dosyaya yazılır. Dosya kullanıcının belirlediği parolayla şifrelenir (Argon2id ile anahtar, XChaCha20-Poly1305 ile şifreleme); Windows hesabına bağlı değildir, bu yüzden başka bilgisayarda açılır. Dosyanın güvenliği o parolanın gücü kadardır. Kayıtlı oturumlar yedeğe girmez.
+- **Açık dışa aktarma.** League Accounts uygulamasının okuduğu JSON. **Şifreler bu dosyada açık yazılıdır.** Ayrı bir onay kutusu işaretlenmeden oluşturulmaz, dosya adı da ne olduğunu söyler. Yalnızca başka bir uygulamaya taşımak içindir.
+
+İçe aktarma (League Accounts dosyası, toplu ekleme, yedekten geri yükleme) şifreleri doğrudan şifreli depoya yazar. Seçilen dosya uygulama tarafından silinmez; açık şifreli bir dosyayı silmek kullanıcıya kalır.
 
 ## Diğer önlemler
 
