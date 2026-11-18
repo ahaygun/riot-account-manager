@@ -1,22 +1,43 @@
-/* Palette: a brass key on indigo night. Brass marks what is locked and
-   what you act on; mint marks who is signed in. System fonts only: the app
-   never fetches anything, fonts included. Motion uses transform and
+/* Palette and frames: the League client's own language, redrawn here in
+   CSS alone. Gold is the frame and whatever you are pointing at; hextech
+   teal is what is live (the signed-in account, a switch in progress) and
+   the action that makes an account live; red asks for a look. Corners are
+   square and edges are hairlines, as in the client.
+
+   Nothing of Riot's is bundled: no artwork, no fonts, no sprites. The
+   display face is a serif Windows already has, the backdrop is a gradient,
+   every glyph is drawn below. The window still fetches nothing (see the
+   content security policy). Colour values follow the client's palette as
+   Tariolle/LeagueAccounts (MIT) documents it. Motion uses transform and
    opacity only, so it costs nothing while idle. */
 :root {
-  --night: #0f1322;      /* the rail, behind everything */
-  --ink: #141829;        /* window */
-  --slate: #1d2238;      /* cards, fields */
-  --slate-up: #262c47;   /* hover, raised */
-  --edge: #323a5c;       /* hairlines */
-  --paper: #f1f3fb;      /* text */
-  --mist: #9aa3c4;       /* secondary text */
-  --brass: #e3b25c;      /* lock, primary action */
-  --brass-deep: #b98a3a;
-  --mint: #5fd4a8;       /* signed in, done */
-  --rose: #f0718a;       /* needs attention, destructive */
+  --night: #010a13;      /* hextech black: the rail, the track, wells */
+  --ink: #07111b;        /* window */
+  --slate: #1e2328;      /* buttons, raised */
+  --edge: #3c3c41;       /* grey rails, disabled */
+  --rail: rgba(60, 60, 65, .7);         /* the line around a card */
+  --hair: rgba(200, 170, 110, .14);     /* a gold hairline between things */
+  --paper: #f0e6d2;      /* text */
+  --sand: #cdbe91;       /* text on buttons */
+  --mist: #a09b8c;       /* secondary text */
+  --faint: #5b5a56;      /* disabled text */
+  --brass: #c8aa6e;      /* gold: frames, lock, selection */
+  --brass-deep: #785a28;
+  --brass-dark: #463714;
+  --mint: #0ac8b9;       /* hextech teal: signed in, in progress, done */
+  --mint-deep: #005a82;
+  --frost: #cdfafa;
+  --rose: #e84057;       /* needs attention, destructive */
+  --rose-soft: #f0a8a0;  /* the same, as running text */
+  --gold-frame: linear-gradient(to top, #785a28 0%, #c89b3c 55%, #c8a355 71%, #c8aa6e 100%);
+  --gold-frame-lit: linear-gradient(to top, #c89b3c, #dcc188 50%, #e1c998 71%, #f0e6d2);
+  --teal-frame: linear-gradient(to top, #005a82, #0596aa 50%, #08b1b2);
+  --teal-frame-lit: linear-gradient(to top, #3097c6, #0ecaba 50%, #cdfafa);
   --ease: cubic-bezier(.2, .8, .2, 1);
   --click: cubic-bezier(.3, 1.6, .5, 1); /* slight overshoot, like a latch */
-  --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  /* Headings: a serif every Windows has. Change the look of all of them here. */
+  --display: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  --text: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   color-scheme: dark;
 }
 
@@ -28,10 +49,26 @@ body {
   margin: 0;
   background: var(--ink);
   color: var(--paper);
-  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font: 14px/1.45 var(--text);
   user-select: none;
   overflow: hidden;
 }
+/* The gold trim along the top of the window. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 2px;
+  z-index: 9;
+  pointer-events: none;
+  background: linear-gradient(90deg, var(--brass-dark), var(--brass-deep) 30%, var(--brass) 50%, var(--brass-deep) 70%, var(--brass-dark));
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { border: 3px solid transparent; background: var(--brass-deep); background-clip: padding-box; min-height: 32px; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--brass); }
+::-webkit-scrollbar-corner { background: transparent; }
 
 /* ---- the shell: a rail on the left, the stage beside it ---- */
 #app { height: 100%; display: grid; grid-template-columns: 208px minmax(0, 1fr); }
@@ -40,146 +77,241 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 18px 10px 12px;
-  background: var(--night);
-  border-right: 1px solid rgba(50, 58, 92, .5);
+  padding: 22px 0 12px;
+  background: linear-gradient(180deg, #08131d, var(--night) 70%);
+  border-right: 1px solid #1f2a30;
   min-height: 0;
 }
-.brand { display: flex; align-items: center; gap: 9px; padding: 0 8px 16px; font: 600 16px/1 var(--display); letter-spacing: -.01em; }
-.brand svg { width: 26px; height: 26px; color: var(--brass); flex: none; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 18px 20px; color: var(--paper); font: 700 14px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; }
+.brand svg { width: 24px; height: 24px; color: var(--brass); flex: none; }
 .spacer { flex: 1; }
 
-#rail nav { display: grid; gap: 2px; }
+#rail nav { display: grid; gap: 1px; }
 .nav {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  border-radius: 9px;
-  background: none;
+  gap: 11px;
+  padding: 9px 18px;
   color: var(--mist);
+  font-size: 13px;
+  letter-spacing: .025em;
   text-align: left;
 }
-.nav svg { width: 16px; height: 16px; flex: none; }
+.nav svg { width: 16px; height: 16px; flex: none; color: #b7a374; }
 .nav > span:first-of-type { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-.nav:hover { background: var(--slate); color: var(--paper); }
-.nav[aria-current="page"] { background: var(--slate); color: var(--paper); box-shadow: inset 2px 0 0 var(--brass); }
-.nav .count { color: var(--mist); font-size: 12px; font-variant-numeric: tabular-nums; }
+.nav:hover { background: rgba(200, 170, 110, .06); color: var(--paper); }
+.nav:hover svg { color: var(--paper); }
+.nav[aria-current="page"] { background: linear-gradient(90deg, rgba(200, 170, 110, .16), transparent 90%); color: var(--paper); box-shadow: inset 2px 0 0 var(--brass); }
+.nav[aria-current="page"] svg { color: var(--brass); }
+.nav .count { color: #b4a47d; font-size: 11px; font-variant-numeric: tabular-nums; }
 .gear { transition: transform .3s var(--ease); }
 .nav:hover .gear { transform: rotate(45deg); }
-/* A small dot on Ayarlar when an update is waiting. */
-.dot-badge { width: 7px; height: 7px; border-radius: 50%; background: var(--brass); }
+/* A small diamond on Ayarlar when an update is waiting. */
+.dot-badge { width: 7px; height: 7px; transform: rotate(45deg); background: var(--brass); box-shadow: 0 0 6px rgba(200, 170, 110, .6); }
 
 /* What needs a look: each line filters the list to it. */
-.status { display: grid; gap: 1px; margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(50, 58, 92, .5); }
+.status { display: grid; gap: 1px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--hair); }
+/* The group's own name as its heading. */
+.status::before { content: attr(aria-label); padding: 0 18px 8px; color: #b8a882; font: 700 10.5px/1.3 var(--display); letter-spacing: .12em; text-transform: uppercase; }
 .status button {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: none;
+  gap: 11px;
+  padding: 6px 18px 6px 21px;
   color: var(--mist);
   font-size: 13px;
   text-align: left;
 }
-.status button::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--edge); flex: none; }
+/* Diamonds, as the client marks its choices. */
+.status button::before { content: ""; width: 6px; height: 6px; transform: rotate(45deg); background: var(--edge); flex: none; }
 .status button[data-status="open"]::before { background: var(--mint); }
 .status button[data-status="attention"]::before, .status button[data-status="banned"]::before { background: var(--rose); }
 .status button[data-status="stale"]::before { background: var(--brass); }
 .status button span { flex: 1; }
-.status button b { font-weight: 400; font-variant-numeric: tabular-nums; }
-.status button:hover { color: var(--paper); background: var(--slate); }
-.status button[aria-checked="true"] { color: var(--paper); background: var(--slate); }
+.status button b { color: #b4a47d; font-weight: 400; font-size: 11px; font-variant-numeric: tabular-nums; }
+.status button:hover { color: var(--paper); background: rgba(200, 170, 110, .06); }
+.status button[aria-checked="true"] { color: var(--paper); background: rgba(200, 170, 110, .1); box-shadow: inset 2px 0 0 var(--brass); }
 
-.lock-state { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 9px; background: none; color: var(--mist); font-size: 13px; text-align: left; }
-.lock-state:hover { background: var(--slate); color: var(--paper); }
-.version { margin: 0; padding: 4px 10px 0; color: var(--mist); font-size: 11px; opacity: .7; }
+.lock-state { display: flex; align-items: center; gap: 9px; padding: 8px 18px; color: var(--mist); font-size: 13px; text-align: left; }
+.lock-state:hover { background: rgba(200, 170, 110, .06); color: var(--paper); }
+.version { margin: 0; padding: 4px 18px 0; color: var(--faint); font-size: 10px; letter-spacing: .08em; }
 
-#stage { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* The stage: where the client hangs its art, a still glow of the same blues. */
+#stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background:
+    radial-gradient(900px 420px at 88% -8%, rgba(10, 50, 60, .62), transparent 70%),
+    radial-gradient(700px 500px at 8% 112%, rgba(0, 90, 130, .1), transparent 70%),
+    linear-gradient(180deg, #0a1622, #050d16);
+}
 
 /* Each view slides in a few pixels when it opens. */
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: view-in .18s var(--ease); }
 @keyframes view-in { from { opacity: 0; transform: translateY(6px); } }
 
-.titlebar { display: flex; align-items: center; gap: 8px; padding: 20px 24px 12px; }
+/* A page's name, in capitals over a gold line that fades out. */
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 24px 16px;
+  padding: 24px 0 14px;
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, var(--brass-deep), rgba(120, 90, 40, .2) 55%, transparent) 1;
+}
 .titlebar h1 {
   margin: 0;
-  font: 600 22px/1.2 var(--display);
-  letter-spacing: -.02em;
+  font: 700 24px/1.2 var(--display);
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  font-variant-numeric: lining-nums;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* An account's name is shown as it was typed. */
+#edit-title { text-transform: none; letter-spacing: .025em; }
 
+/* ---- fields ---- */
 input[type="text"], input[type="password"], select, textarea {
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: var(--slate);
+  padding: 8px 11px;
+  border: 1px solid var(--brass-deep);
+  border-radius: 0;
+  background-color: rgba(0, 0, 0, .55);
   color: var(--paper);
   font: inherit;
   outline: none;
   transition: border-color .15s, background-color .15s;
 }
-input:hover, select:hover { background: var(--slate-up); }
-input:focus, select:focus, textarea:focus { border-color: var(--brass); background: var(--slate); }
-input::placeholder, textarea::placeholder { color: var(--mist); }
+input[type="text"]:hover, input[type="password"]:hover, textarea:hover { border-color: #a9852d; }
+input[type="text"]:focus, input[type="password"]:focus, textarea:focus { border-color: var(--brass); background-color: rgba(18, 26, 33, .8); box-shadow: 0 0 0 1px rgba(200, 170, 110, .18); }
+input:disabled, select:disabled, textarea:disabled { border-color: var(--edge); border-image: none; color: var(--faint); cursor: default; }
+input::placeholder, textarea::placeholder { color: var(--mist); opacity: .8; }
+input[readonly] { cursor: pointer; }
 
+/* A framed dropdown: the gold edge and the pair of arrows. */
+select {
+  appearance: none;
+  padding-right: 30px;
+  border-color: transparent;
+  border-image: linear-gradient(to top, #695625 0%, #a9852d 23%, #b88d35 93%, #c8aa6e 100%) 1;
+  background-color: rgba(30, 35, 40, .5);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 14' fill='none' stroke='%23c8aa6e' stroke-width='1.6'%3E%3Cpath d='M1 5l3.5-3.5L8 5M1 9l3.5 3.5L8 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 9px 14px;
+  color: var(--sand);
+  cursor: pointer;
+}
+select:hover, select:focus { border-image: linear-gradient(to top, #c89b3c, #f0e6d2) 1; background-color: rgba(88, 83, 66, .35); color: var(--paper); }
+select:disabled { background-color: rgba(30, 35, 40, .3); opacity: .7; }
+select option { background: var(--night); color: var(--sand); }
+
+/* ---- buttons ----
+   A button is a flat plate with a gold edge unless it says otherwise; the
+   ones that are part of something else (rail, card, menu) drop the frame. */
 button {
-  padding: 9px 14px;
-  border: 0;
-  border-radius: 10px;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-image: var(--gold-frame) 1;
+  border-radius: 0;
   background: var(--slate);
-  color: var(--paper);
+  box-shadow: 0 0 0 1px var(--night), inset 0 0 0 1px var(--night);
+  color: var(--sand);
   font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .025em;
   cursor: pointer;
   white-space: nowrap;
-  transition: background-color .15s, transform .12s var(--ease), opacity .15s;
+  transition: color .15s, transform .12s var(--ease), opacity .15s;
 }
-button:hover { background: var(--slate-up); }
-button:active { transform: scale(.97); }
-button:disabled { opacity: .45; cursor: default; transform: none; }
-button:focus-visible, input[type="checkbox"]:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
-button.primary { background: var(--brass); color: #2a1e06; font-weight: 600; }
-button.primary:hover { background: #edc276; }
-button.danger { color: var(--rose); }
-button.link { background: none; color: var(--mist); padding: 4px 6px; }
+button:hover { border-image: var(--gold-frame-lit) 1; background: linear-gradient(0deg, rgba(118, 97, 51, .8) -40%, #1e232a 60%); color: var(--paper); }
+button:active { transform: scale(.98); }
+button:disabled { border-image: none; border-color: var(--edge); background: var(--slate); color: var(--faint); cursor: default; transform: none; }
+button:focus-visible, input[type="checkbox"]:focus-visible { outline: 1px solid var(--paper); outline-offset: 2px; }
+
+.nav, .status button, .lock-state, button.link, .seg button, .account .go, .account .more, .menu button {
+  border: 0;
+  background: none;
+  box-shadow: none;
+  font-weight: 400;
+}
+
+/* The one thing to do here: warm gold, in capitals. */
+button.primary {
+  padding: 8px 18px;
+  background: linear-gradient(#5a401f, #332717);
+  color: var(--paper);
+  font: 700 12px/1.35 var(--display);
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+button.primary:hover { background: linear-gradient(#604522, #846745); }
+button.danger { border-image: linear-gradient(to top, #6b2a25, #b0483e) 1; background: #30201d; color: #ed9b86; }
+button.danger:hover { border-image: linear-gradient(to top, #b0483e, #f0a8a0) 1; background: #49302a; color: #ffd6c5; }
+button.primary:disabled, button.danger:disabled { border-image: none; border-color: var(--edge); background: var(--slate); color: var(--faint); }
+button.link { color: var(--mist); padding: 4px 6px; font-size: 13px; }
 button.link:hover { color: var(--paper); background: none; }
 
-main { flex: 1; overflow-y: auto; padding: 0 24px 20px; }
-main::-webkit-scrollbar { width: 10px; }
-main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 5px; border: 2px solid var(--ink); }
+/* The scrollbar's room is always kept (10px of the right margin), so a list
+   growing past the window never shifts, and its edge stays under the bar's. */
+main { flex: 1; overflow-y: auto; padding: 0 14px 20px 24px; scrollbar-gutter: stable; }
 
 /* ---- the bar above the accounts ---- */
-.bar { display: flex; align-items: center; gap: 10px; padding: 18px 24px 14px; }
-#filter { flex: 1; min-width: 180px; padding: 11px 14px; font-size: 15px; }
-.seg { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--slate); flex: none; }
-.seg button { padding: 6px 12px; border-radius: 8px; background: none; color: var(--mist); font-size: 12px; font-weight: 600; }
-.seg button:hover { color: var(--paper); background: none; }
-.seg button[aria-checked="true"] { background: var(--slate-up); color: var(--paper); box-shadow: inset 0 0 0 1px var(--edge); }
-.seg.icons button { padding: 6px 8px; display: grid; }
+/* It holds one line at every size the window allows; should a font ever run
+   wider than planned, it wraps rather than pushing a button out of sight. */
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 24px 16px; padding: 20px 0 16px; border-bottom: 1px solid var(--hair); }
+.bar > *, .tools > * { height: 34px; }
+#filter {
+  flex: 1;
+  min-width: 150px;
+  padding: 0 12px 0 34px;
+  font-size: 13px;
+  letter-spacing: .025em;
+  background-color: rgba(0, 0, 0, .7);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23c8aa6e' stroke-width='1.7' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.3'/%3E%3Cpath d='M10.4 10.4L14 14'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 11px center;
+  background-size: 14px 14px;
+}
+.seg { display: flex; padding: 2px; border: 1px solid #344046; background: rgba(1, 10, 19, .6); flex: none; }
+.seg button { position: relative; padding: 0 10px; color: var(--mist); font: 700 11px/1 var(--display); letter-spacing: .07em; text-transform: uppercase; }
+.seg button:hover { color: var(--paper); background: rgba(200, 170, 110, .06); }
+/* The chosen one is lit from below, as a tab in the client is. */
+.seg button[aria-checked="true"] { background: linear-gradient(0deg, rgba(205, 190, 145, .2), transparent 75%); color: var(--paper); box-shadow: inset 0 -1px 0 var(--brass); }
+.seg.icons button { padding: 0 8px; display: grid; place-items: center; color: #b7a374; }
+.seg.icons button[aria-checked="true"] { color: #dfc690; }
 .seg.icons svg { width: 16px; height: 16px; }
-.tools { display: flex; align-items: center; gap: 10px; flex: none; }
-.tools select { width: auto; max-width: 150px; padding: 8px 10px; font-size: 13px; }
+.tools { display: flex; align-items: center; gap: 8px; flex: none; height: 34px; }
+.tools select { width: auto; max-width: 140px; padding-block: 0; font-size: 12px; letter-spacing: .025em; }
+#add { padding-inline: 15px; }
 
 /* ---- accounts ---- */
-#accounts { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+#accounts { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
 #accounts.cards { grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); }
-#accounts.rows { gap: 6px; }
+#accounts.rows { gap: 8px; }
 
+/* A card's frame is two hairlines, a grey one and a dark one inside it,
+   over a well of hextech black. Pointing at it turns the grey one gold;
+   being signed in turns it teal. */
 .account {
   --tier: var(--edge);
   position: relative;
   display: flex;
-  border-radius: 14px;
-  background: var(--slate);
+  border: 1px solid var(--rail);
+  background: rgba(1, 10, 19, .7);
+  box-shadow: inset 0 0 0 1px rgba(1, 10, 19, .6);
   overflow: hidden;
-  transition: background-color .15s, transform .12s var(--ease), box-shadow .15s;
+  transition: transform .12s var(--ease), box-shadow .15s;
 }
-.account:hover, .account.selected { background: var(--slate-up); }
-.account.selected { box-shadow: inset 0 0 0 1px var(--edge); }
-.account.active { box-shadow: inset 0 0 0 1px rgba(95, 212, 168, .45); }
+.account:hover, .account.selected { border-color: transparent; border-image: linear-gradient(0deg, #c89b3c, #f0e6d2) 1; background: rgba(1, 10, 19, .82); }
+.account.active { border-color: transparent; border-image: linear-gradient(0deg, var(--mint-deep), var(--mint)) 1; box-shadow: inset 0 0 0 1px rgba(1, 10, 19, .6), inset 0 0 30px rgba(10, 200, 185, .07); }
+.account.active:hover { border-image: var(--teal-frame-lit) 1; }
 
 /* Tier colours, for the crest and the bar under the rank. */
 .account[data-tier="iron"] { --tier: #7d7f8c; }
@@ -197,12 +329,15 @@ main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 5px; bor
   flex: 1;
   min-width: 0;
   display: grid;
-  border-radius: 0;
-  background: none;
+  color: var(--paper);
+  font-size: 14px;
+  letter-spacing: 0;
   text-align: left;
   white-space: normal;
 }
+.account .go:hover { background: none; }
 .account .go:active { transform: none; }
+.account .go:disabled { background: none; color: var(--paper); opacity: .6; }
 
 /* The crest: a plate in the tier's metal with the division inside; the
    setting around it grows with the tier (see CRESTS in main.js). */
@@ -214,43 +349,56 @@ main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 5px; bor
 .crest .blades { stroke: var(--night); stroke-width: .6; stroke-linejoin: round; }
 .crest .ring { fill: none; stroke-width: 1.1; }
 .crest .stone-cut { fill: none; stroke: var(--night); stroke-width: .7; stroke-opacity: .55; }
-.crest text { fill: var(--paper); font: 700 11.5px var(--display); }
+.crest text { fill: var(--paper); font: 700 11.5px var(--display); font-variant-numeric: lining-nums; }
 /* From Diamond up the crest lights what is behind it. */
 .crest.glow { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--tier) 55%, transparent)); }
 
-.account .who { display: grid; gap: 1px; min-width: 0; }
-.account .name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font: 600 16px/1.3 var(--display); letter-spacing: -.01em; }
+.account .who { display: grid; gap: 2px; min-width: 0; }
+.account .name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font: 700 17px/1.25 var(--display); letter-spacing: .025em; font-variant-numeric: lining-nums; }
 /* The name keeps its room; a tag that does not fit beside it goes below. */
 .account .name > span:first-child { flex: 0 1 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account .name .tag { flex: none; }
-.account .sub { color: var(--mist); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.account .sub .on { color: var(--mint); margin-right: 8px; }
+.account .sub { color: var(--mist); font-size: 12px; letter-spacing: .025em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account .sub .on { color: var(--mint); font-weight: 600; margin-right: 8px; }
 
-.account .rank { display: grid; gap: 5px; min-width: 0; }
-.account .rank-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.account .rank-line b { font-weight: 600; color: var(--tier); filter: brightness(1.15); white-space: nowrap; }
-.account .rank-line span { color: var(--mist); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.account .lp { height: 3px; border-radius: 2px; background: var(--ink); overflow: hidden; }
-.account .lp i { display: block; height: 100%; border-radius: 2px; background: var(--tier); transform-origin: left; transform: scaleX(var(--lp, 0)); }
-.account .rank.none .rank-line b { color: var(--mist); font-weight: 400; filter: none; }
+/* The rank, set as the client sets it: the tier in capitals, the points beside. */
+.account .rank { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
+.account .rank-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-family: var(--display); font-variant-numeric: lining-nums; text-transform: uppercase; }
+.account .rank-line b { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 700; font-size: 15px; letter-spacing: .05em; color: var(--tier); filter: brightness(1.15); white-space: nowrap; }
+.account .rank-line span { flex: none; color: var(--mist); font-weight: 700; font-size: 12px; letter-spacing: .075em; white-space: nowrap; }
+.account .lp { height: 2px; background: rgba(60, 60, 65, .6); overflow: hidden; }
+.account .lp i { display: block; height: 100%; background: linear-gradient(90deg, var(--tier), color-mix(in srgb, var(--tier) 55%, var(--paper))); transform-origin: left; transform: scaleX(var(--lp, 0)); }
+.account .rank.none .rank-line b { color: var(--mist); font-size: 13px; filter: none; }
 .account .rank.none .lp { visibility: hidden; }
 
-.account .detail { display: flex; gap: 12px; color: var(--mist); font-size: 12px; min-width: 0; overflow: hidden; }
+.account .detail { display: flex; gap: 10px; color: var(--mist); font-size: 12px; letter-spacing: .025em; min-width: 0; overflow: hidden; }
 .account .detail span { flex: none; }
+.account .detail .record { flex: none; color: var(--paper); font-variant-numeric: tabular-nums; }
+.account .detail .key { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account .detail .note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
 
-.tag { flex: none; padding: 1px 7px; border-radius: 6px; background: var(--ink); color: var(--mist); font: 400 11px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; letter-spacing: 0; }
-.tag.warn { background: none; box-shadow: inset 0 0 0 1px var(--rose); color: var(--rose); }
+/* A chip: a word in a thin box. */
+.tag { flex: none; padding: 0 6px; border: 1px solid #4c5a60; color: #a6b3b7; font: 400 10.5px/1.55 var(--text); letter-spacing: .04em; }
+.tag.warn { border-color: #8f3a33; background: rgba(194, 67, 58, .12); color: var(--rose-soft); }
 
+/* Opening an account is the hextech button: teal edge, cold light. */
 .account .acts { display: flex; align-items: center; gap: 6px; flex: none; }
-.account .alt { padding: 6px 11px; border-radius: 8px; background: var(--ink); color: var(--mist); font-size: 12px; font-weight: 600; }
-.account .alt:hover { background: var(--brass); color: #2a1e06; }
-.account .open { padding: 7px 14px; border-radius: 8px; background: var(--ink); font-weight: 600; }
-.account .open:hover { background: var(--brass); color: #2a1e06; }
-.account.active .open { background: none; box-shadow: inset 0 0 0 1px rgba(95, 212, 168, .45); color: var(--mint); }
-.account.active .open:hover { background: var(--mint); color: #0c2a20; }
-.account .more { background: none; color: var(--mist); padding: 4px 10px; font-size: 18px; line-height: 1; }
-.account .more:hover { color: var(--paper); background: var(--ink); }
+.account .open {
+  height: 32px;
+  padding: 0 14px;
+  border-image: var(--teal-frame) 1;
+  color: #a3c7c7;
+  font: 700 11px/1 var(--display);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.account .open:hover { border-image: var(--teal-frame-lit) 1; background: linear-gradient(0deg, rgba(0, 90, 130, .4), var(--slate)); color: var(--frost); }
+.account .alt { padding: 0 10px; letter-spacing: .09em; }
+.account.active .open { background: linear-gradient(0deg, rgba(0, 90, 130, .55), rgba(10, 50, 60, .65)); color: var(--frost); }
+.account.active .open:hover { background: linear-gradient(0deg, rgba(3, 151, 171, .55), rgba(10, 50, 60, .8)); }
+.account .open:disabled { border-image: none; border-color: var(--edge); background: var(--slate); color: var(--faint); }
+.account .more { height: 32px; padding: 0 8px; color: var(--mist); font-size: 18px; line-height: 1; }
+.account .more:hover { color: var(--paper); background: var(--slate); }
 
 /* Cards: a plate per account. */
 #accounts.cards .account { flex-direction: column; }
@@ -258,23 +406,31 @@ main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 5px; bor
 #accounts.cards .crest { grid-area: crest; }
 #accounts.cards .who { grid-area: who; }
 #accounts.cards .rank { grid-area: rank; }
-#accounts.cards .detail { grid-area: detail; min-height: 18px; }
-#accounts.cards .acts { padding: 0 12px 12px; }
+#accounts.cards .detail { grid-area: detail; min-height: 28px; padding-top: 10px; border-top: 1px solid rgba(200, 170, 110, .1); }
+#accounts.cards .acts { padding: 0 16px 14px; }
 #accounts.cards .open { flex: 1; }
 
 /* Rows: one line per account, in columns. */
 #accounts.rows .account { align-items: center; }
-#accounts.rows .go { grid-template-columns: auto minmax(120px, 1.3fr) minmax(130px, 1fr) minmax(0, 1.2fr); gap: 16px; align-items: center; padding: 10px 8px 10px 14px; }
+#accounts.rows .go { grid-template-columns: auto minmax(120px, 1fr) minmax(190px, 1fr) minmax(0, 1.2fr); gap: 16px; align-items: center; padding: 10px 8px 10px 14px; }
+#accounts.rows .rank-line b { font-size: 13.5px; }
+/* A row's details keep to one line: what does not fit whole is left out
+   rather than cut, and a note takes whatever room remains. */
+#accounts.rows .detail { flex-wrap: wrap; align-content: flex-start; height: 1.45em; }
+#accounts.rows .detail .key { flex: none; }
+#accounts.rows .detail .note { flex: 1 1 0; min-width: 6ch; }
 #accounts.rows .crest { width: 52px; height: 52px; margin: -8px -6px; }
-#accounts.rows .acts { padding-right: 10px; }
+#accounts.rows .acts { padding-right: 12px; }
 
 /* Reordering: the held one floats under the pointer, the others make room. */
 #accounts.reordering .account { transition: transform .16s var(--ease); }
 #accounts.reordering .account.dragging {
   z-index: 2;
   transition: none;
-  background: var(--slate-up);
-  box-shadow: 0 14px 30px rgba(4, 6, 14, .6), inset 0 0 0 1px var(--brass-deep);
+  border-color: transparent;
+  border-image: var(--gold-frame-lit) 1;
+  background: #0a1620;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, .65);
   cursor: grabbing;
 }
 #accounts.reordering { cursor: grabbing; }
@@ -284,24 +440,24 @@ main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 5px; bor
 #accounts.arriving .account { animation: row-in .28s var(--ease) backwards; animation-delay: calc(var(--i) * 30ms); }
 @keyframes row-in { from { opacity: 0; transform: translateY(8px); } }
 
-/* While an account is being opened, a light band travels along its edge. */
+/* While an account is being opened, a cold light travels along its edge. */
 .account.busy::after {
   content: "";
   position: absolute;
   inset: auto 0 0 0;
   height: 2px;
-  background: linear-gradient(90deg, transparent, var(--brass), transparent);
+  background: linear-gradient(90deg, transparent, var(--mint), var(--frost), var(--mint), transparent);
   animation: travel 1s linear infinite;
 }
 @keyframes travel { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 
 /* Something is in progress and has no known length. */
-.progress { position: relative; height: 3px; border-radius: 2px; background: var(--slate); overflow: hidden; }
+.progress { position: relative; height: 2px; background: var(--slate); overflow: hidden; }
 .progress::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, var(--brass), transparent);
+  background: linear-gradient(90deg, transparent, var(--mint), var(--frost), var(--mint), transparent);
   animation: travel 1s linear infinite;
 }
 /* A button whose action is running. */
@@ -317,22 +473,22 @@ button.working::after {
 
 
 /* Nothing to show: said plainly, with what to do about it. */
-.empty { grid-column: 1 / -1; display: grid; justify-items: center; gap: 6px; padding: 72px 16px; color: var(--mist); text-align: center; }
-.empty b { color: var(--paper); font: 600 18px var(--display); }
+.empty { grid-column: 1 / -1; display: grid; justify-items: center; gap: 8px; padding: 72px 16px; color: var(--mist); text-align: center; }
+.empty b { color: var(--paper); font: 700 20px var(--display); letter-spacing: .05em; text-transform: uppercase; }
 
 /* ---- banners and messages ---- */
 .banner {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 0 24px 10px;
-  padding: 10px 10px 10px 14px;
-  border-radius: 12px;
-  background: var(--slate);
+  margin: 0 24px 12px;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--rail);
+  background: rgba(1, 10, 19, .75);
   animation: drop-in .2s var(--ease);
 }
 @keyframes drop-in { from { opacity: 0; transform: translateY(-6px); } }
-.banner.accent { box-shadow: inset 0 0 0 1px var(--brass-deep); }
+.banner.accent { border-color: var(--brass-dark); box-shadow: inset 2px 0 0 var(--brass); }
 .banner p { margin: 0; flex: 1; }
 
 /* A message floats over the stage, above the track. */
@@ -344,15 +500,16 @@ button.working::after {
   align-items: center;
   gap: 12px;
   padding: 11px 12px 11px 16px;
-  border-radius: 12px;
-  background: var(--slate-up);
-  box-shadow: 0 12px 32px rgba(4, 6, 14, .55), inset 0 0 0 1px var(--edge);
-  color: var(--paper);
+  border: 2px solid transparent;
+  border-image: linear-gradient(to top, var(--brass-deep), var(--brass-dark) 50%) 1;
+  background: var(--night);
+  box-shadow: 0 0 0 1px rgba(1, 10, 19, .5), 0 12px 32px rgba(0, 0, 0, .6);
+  color: var(--sand);
   animation: rise-in .2s var(--ease);
 }
 #message p { margin: 0; flex: 1; }
-#message.error { box-shadow: 0 12px 32px rgba(4, 6, 14, .55), inset 0 0 0 1px var(--rose); }
-#message.error p { color: var(--rose); }
+#message.error { border-image: linear-gradient(to top, #b0483e, #6b2a25 50%) 1; }
+#message.error p { color: var(--rose-soft); }
 #stage.tracking #message { bottom: 88px; }
 @keyframes rise-in { from { opacity: 0; transform: translateY(8px); } }
 
@@ -362,126 +519,139 @@ button.working::after {
   align-items: center;
   gap: 20px;
   padding: 14px 24px;
+  border-top: 1px solid transparent;
+  border-image: linear-gradient(90deg, var(--brass-dark), var(--brass-deep) 50%, var(--brass-dark)) 1;
   background: var(--night);
-  border-top: 1px solid rgba(50, 58, 92, .6);
   animation: rise-in .22s var(--ease);
 }
 .track-who { display: grid; gap: 1px; width: 190px; flex: none; }
-.track-who b { font: 600 15px/1.25 var(--display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-who b { font: 700 15px/1.25 var(--display); letter-spacing: .025em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track-who span { color: var(--mist); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#track.failed .track-who span { color: var(--rose); }
+#track.failed .track-who span { color: var(--rose-soft); }
 #track.done .track-who span { color: var(--mint); }
 
 #track-stations { flex: 1; display: flex; margin: 0; padding: 0; list-style: none; min-width: 0; }
-#track-stations li { position: relative; flex: 1; display: grid; justify-items: center; gap: 6px; color: var(--mist); font-size: 11px; white-space: nowrap; }
+#track-stations li { position: relative; flex: 1; display: grid; justify-items: center; gap: 7px; color: var(--faint); font: 700 10px/1.2 var(--display); letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
 /* The rail between two stations; it fills as the switch passes. */
 #track-stations li + li::before {
   content: "";
   position: absolute;
   top: 6px; right: 50%;
   width: 100%;
-  height: 2px;
+  height: 1px;
   background: var(--edge);
 }
-#track-stations li + li.reached::before { background: var(--mint); }
+#track-stations li + li.reached::before { background: var(--brass); }
+/* A station is a diamond: passed ones are gold, the one being worked on
+   is lit teal. */
 #track-stations li i {
   position: relative;
   z-index: 1;
-  width: 14px; height: 14px;
-  border-radius: 50%;
+  width: 9px; height: 9px;
+  margin: 2px;
+  transform: rotate(45deg);
   background: var(--night);
-  box-shadow: inset 0 0 0 2px var(--edge);
+  box-shadow: inset 0 0 0 1px var(--faint);
   transition: background-color .2s, box-shadow .2s, transform .25s var(--click);
 }
-#track-stations li.reached i { background: var(--mint); box-shadow: none; }
-#track-stations li.reached { color: var(--paper); }
-#track-stations li.now i { background: var(--brass); box-shadow: 0 0 0 4px rgba(227, 178, 92, .22); transform: scale(1.15); animation: pulse 1.2s ease-in-out infinite; }
-#track-stations li.now { color: var(--brass); }
+#track-stations li.reached i { background: var(--brass); box-shadow: none; }
+#track-stations li.reached { color: var(--sand); }
+#track-stations li.now i { background: var(--mint); box-shadow: 0 0 0 3px rgba(10, 200, 185, .22), 0 0 10px rgba(10, 200, 185, .5); transform: rotate(45deg) scale(1.2); animation: pulse 1.2s ease-in-out infinite; }
+#track-stations li.now { color: var(--frost); }
 #track-stations li.failed i { background: var(--rose); box-shadow: none; animation: none; }
-#track-stations li.failed { color: var(--rose); }
-@keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(227, 178, 92, .08); } }
+#track-stations li.failed { color: var(--rose-soft); }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(10, 200, 185, .08), 0 0 10px rgba(10, 200, 185, .5); } }
 .track-time { width: 44px; text-align: right; color: var(--mist); font-size: 12px; font-variant-numeric: tabular-nums; flex: none; }
 
-/* Checkbox drawn as a switch. */
-.check { display: flex; align-items: center; gap: 8px; color: var(--mist); font-size: 12px; cursor: pointer; white-space: nowrap; }
-#security { display: inline-flex; align-items: center; gap: 6px; }
+/* A checkbox as the client draws it: a small gold box, ticked in gold. */
+.check { display: flex; align-items: center; gap: 10px; color: var(--mist); font-size: 12px; letter-spacing: .025em; cursor: pointer; white-space: nowrap; }
 .check input {
   appearance: none;
-  width: 30px; height: 18px;
+  flex: none;
+  width: 14px; height: 14px;
   margin: 0;
-  border-radius: 9px;
-  background: var(--edge);
+  border: 1px solid var(--brass-deep);
+  background: var(--night);
   position: relative;
   cursor: pointer;
-  transition: background-color .2s;
+  transition: border-color .15s;
 }
 .check input::after {
   content: "";
   position: absolute;
-  top: 3px; left: 3px;
-  width: 12px; height: 12px;
-  border-radius: 50%;
-  background: var(--paper);
-  transition: transform .2s var(--click);
+  left: 3.5px; top: .5px;
+  width: 4px; height: 8px;
+  border: solid var(--brass);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) scale(0);
+  transition: transform .15s var(--click);
 }
-.check input:checked { background: var(--mint); }
-.check input:checked::after { transform: translateX(12px); }
+.check:hover input, .check input:checked { border-color: var(--brass); }
+.check input:checked::after { transform: rotate(45deg) scale(1); }
+.check:hover { color: var(--paper); }
+.check input:disabled { border-color: var(--edge); cursor: default; }
+.check input:disabled::after { border-color: var(--faint); }
+.check:has(input:disabled) { color: var(--faint); cursor: default; }
 
 
 /* ---- forms (settings, wizard, security) ---- */
 .form { display: flex; flex-direction: column; gap: 12px; max-width: 560px; }
 /* Pages made of several cards lay them out side by side when there is room. */
-.form.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 14px; max-width: 1040px; }
+.form.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; max-width: 1040px; }
 .form.cols > :not(.card) { grid-column: 1 / -1; }
-.form label { display: grid; gap: 5px; color: var(--mist); font-size: 12px; }
-.form .row { display: flex; gap: 6px; }
+.form label { display: grid; gap: 6px; color: var(--mist); font-size: 12px; letter-spacing: .025em; }
+.form .row { display: flex; gap: 8px; }
 .form .row input { flex: 1; }
-fieldset { margin: 0; padding: 12px; border: 1px solid var(--edge); border-radius: 12px; display: grid; gap: 8px; }
-legend { color: var(--mist); font-size: 12px; padding: 0 6px; }
-.hint { margin: 0; color: var(--mist); font-size: 12px; }
-.hint.error { color: var(--rose); }
+.form .row select { width: auto; flex: none; }
+fieldset { margin: 0; padding: 14px; border: 1px solid var(--rail); background: rgba(1, 10, 19, .45); display: grid; gap: 10px; }
+legend { padding: 0 8px; color: #b8a882; font: 700 10.5px/1.3 var(--display); letter-spacing: .12em; text-transform: uppercase; }
+.hint { margin: 0; color: var(--mist); font-size: 12px; letter-spacing: .015em; }
+.hint.error { color: var(--rose-soft); }
 .hint:empty { display: none; }
 
 .step { display: flex; flex-direction: column; gap: 12px; animation: view-in .18s var(--ease); }
 .step p, .step ol { margin: 0; }
 .step ol { padding-left: 20px; display: grid; gap: 4px; }
-.choice { display: grid; gap: 4px; padding: 16px; text-align: left; white-space: normal; border-radius: 12px; }
-.choice b { font-size: 15px; }
+.choice { display: grid; gap: 5px; padding: 16px 18px; font-weight: 400; text-align: left; white-space: normal; }
+.choice b { color: var(--paper); font: 700 14px/1.3 var(--display); letter-spacing: .06em; text-transform: uppercase; }
 .choice span { color: var(--mist); font-size: 12px; }
 
-.card { display: grid; gap: 9px; padding: 16px; border-radius: 14px; background: var(--slate); }
-.card h2 { margin: 0; font: 600 15px/1.3 var(--display); display: flex; align-items: center; gap: 8px; }
+/* A panel: the same two hairlines as an account's card, its name in
+   capitals over a gold line. */
+.card { display: grid; gap: 10px; padding: 16px 18px 18px; border: 1px solid var(--rail); background: rgba(1, 10, 19, .62); box-shadow: inset 0 0 0 1px rgba(1, 10, 19, .6); }
+.card h2 { margin: 0; display: flex; align-items: center; gap: 8px; font: 700 14px/18px var(--display); letter-spacing: .075em; text-transform: uppercase; font-variant-numeric: lining-nums; }
+.card > h2, .card > .row-between:first-child { padding-bottom: 10px; border-bottom: 1px solid var(--hair); }
 .card p { margin: 0; }
-.card ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--mist); font-size: 12px; }
-.card button, .card input, .card select, .card textarea { background: var(--ink); }
-.card button:hover { background: var(--slate-up); }
-.card button.primary { background: var(--brass); }
-.card button.primary:hover { background: #edc276; }
-.card.warn { box-shadow: inset 0 0 0 1px var(--rose); }
-.card.warn h2 { color: var(--rose); }
+.card ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; color: var(--mist); font-size: 12px; letter-spacing: .015em; }
+.card ul li { position: relative; padding-left: 16px; }
+.card ul li::before { content: ""; position: absolute; left: 2px; top: .52em; width: 5px; height: 5px; transform: rotate(45deg); background: var(--brass-deep); }
+.card.warn { border-color: #8f3a33; }
+.card.warn h2 { color: var(--rose-soft); }
 .path { user-select: text; word-break: break-all; }
-.form label.check { display: flex; font-size: 13px; color: var(--paper); }
+.form label.check { display: flex; font-size: 13px; color: var(--sand); }
+.form label.check:hover { color: var(--paper); }
 .form textarea { font: 12px/1.5 ui-monospace, Consolas, monospace; resize: vertical; }
-.form code { padding: 1px 5px; border-radius: 5px; background: var(--ink); font: 11px ui-monospace, Consolas, monospace; }
+.form code { padding: 1px 5px; background: var(--slate); color: var(--sand); font: 11px ui-monospace, Consolas, monospace; }
 
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .muted { color: var(--mist); font-weight: 400; }
-.pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--ink); color: var(--mist); }
-.pill.good { color: var(--mint); }
-.pill.new { color: #2a1e06; background: var(--brass); }
+.pill { padding: 1px 8px; border: 1px solid var(--edge); color: var(--mist); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; }
+.pill:empty { display: none; }
+.pill.good { border-color: rgba(10, 200, 185, .45); color: var(--mint); }
+.pill.new { border-color: var(--brass); background: var(--brass); color: #1a1206; }
 
 /* ---- the diagnostic log ---- */
 #view-log .form { max-width: none; }
-.log { margin: 0; padding: 10px 0; list-style: none; border-radius: 12px; background: var(--night); font: 12px/1.7 ui-monospace, Consolas, monospace; user-select: text; }
+.log { margin: 0; padding: 10px 0; list-style: none; border: 1px solid var(--rail); background: rgba(1, 10, 19, .8); font: 12px/1.7 ui-monospace, Consolas, monospace; user-select: text; }
 .log li { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; padding: 0 14px; }
-.log li:hover { background: var(--slate); }
+.log li:hover { background: rgba(30, 35, 40, .7); }
 .log time { color: var(--mist); white-space: nowrap; }
 .log span { overflow-wrap: anywhere; }
 .log .part { color: var(--brass); }
 /* A new switch starts a new block. */
-.log li.start { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(50, 58, 92, .5); }
+.log li.start { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hair); }
 .log li.start:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
-.log li.bad span { color: var(--rose); }
+.log li.bad span { color: var(--rose-soft); }
 
 /* Small padlock beside headings and counts: closed when the lock is on. */
 .lock-mark { width: 16px; height: 16px; color: var(--mist); flex: none; }
@@ -496,16 +666,16 @@ legend { color: var(--mist); font-size: 12px; padding: 0 6px; }
   display: grid;
   place-content: center;
   justify-items: center;
-  gap: 14px;
-  background: rgba(20, 24, 41, .94);
+  gap: 16px;
+  background: rgba(1, 10, 19, .94);
   z-index: 10;
   animation: seal-in .15s ease-out;
 }
 #seal.leaving { opacity: 0; transition: opacity .2s ease-in; }
 @keyframes seal-in { from { opacity: 0; } }
-#seal p { margin: 0; color: var(--mist); font-size: 13px; }
+#seal p { margin: 0; color: var(--sand); font: 700 12px var(--display); letter-spacing: .14em; text-transform: uppercase; }
 
-.padlock { width: 72px; height: 72px; color: var(--brass); overflow: visible; }
+.padlock { width: 72px; height: 72px; color: var(--brass); overflow: visible; filter: drop-shadow(0 0 12px rgba(200, 170, 110, .25)); }
 .padlock .shackle { transform: translateY(-9px); transition: transform .32s var(--click); }
 .padlock .keyhole { transform-origin: 36px 46px; transition: transform .3s var(--ease), opacity .3s; }
 .padlock .ring { opacity: 0; transform-origin: 36px 40px; }
@@ -532,7 +702,6 @@ legend { color: var(--mist); font-size: 12px; padding: 0 6px; }
 }
 
 
-
 /* A narrow window keeps the rail to its icons. */
 @media (max-width: 900px) {
   .form.cols { grid-template-columns: minmax(0, 1fr); }
@@ -540,36 +709,42 @@ legend { color: var(--mist); font-size: 12px; padding: 0 6px; }
 @media (max-width: 760px) {
   #app { grid-template-columns: 56px minmax(0, 1fr); }
   .brand span, .nav > span, .status, .version, .lock-state span { display: none; }
-  .brand { padding-left: 5px; }
+  .brand { padding-left: 16px; }
+  .nav, .lock-state { padding-inline: 20px; }
   .track-who { width: 120px; }
 }
 
 /* ---- the face of an account: its icon with the crest in the corner ---- */
 .portrait { position: relative; display: grid; place-items: center; flex: none; }
-.portrait img { width: 48px; height: 48px; border-radius: 14px; display: block; box-shadow: 0 0 0 2px color-mix(in srgb, var(--tier) 70%, var(--edge)); }
+/* Round, in a ring of the tier's metal, as the client frames a summoner. */
+.portrait img { width: 48px; height: 48px; border-radius: 50%; display: block; box-shadow: 0 0 0 2px color-mix(in srgb, var(--tier) 70%, var(--brass-deep)), 0 0 0 3px var(--night); }
 .portrait.pictured { margin-right: 12px; margin-bottom: 8px; }
-.portrait.pictured .crest { position: absolute; right: -28px; bottom: -28px; margin: 0; filter: drop-shadow(0 2px 5px rgba(4, 6, 14, .7)); }
+/* Set into the corner a little smaller, so the picture is still a picture. */
+.portrait.pictured .crest { position: absolute; width: 58px; height: 58px; right: -26px; bottom: -26px; margin: 0; filter: drop-shadow(0 2px 5px rgba(0, 0, 0, .75)); }
 #accounts.cards .portrait { grid-area: crest; }
-#accounts.rows .portrait img { width: 38px; height: 38px; border-radius: 11px; }
+#accounts.rows .portrait img { width: 38px; height: 38px; }
 #accounts.rows .portrait.pictured { margin-right: 10px; margin-bottom: 4px; }
-#accounts.rows .portrait.pictured .crest { right: -22px; bottom: -22px; }
-.account .detail .record { color: var(--paper); font-variant-numeric: tabular-nums; }
+#accounts.rows .portrait.pictured .crest { width: 48px; height: 48px; right: -22px; bottom: -18px; }
 
 /* ---- the question about the internet ---- */
-.banner.ask { align-items: flex-start; box-shadow: inset 0 0 0 1px var(--brass-deep); }
+.banner.ask { align-items: flex-start; padding-block: 14px; border-color: transparent; border-image: linear-gradient(to top, var(--brass-dark), var(--brass-deep)) 1; }
 .banner.ask > div { flex: 1; display: grid; gap: 4px; }
 .banner.ask button { align-self: center; }
 
 /* ---- the internet page ---- */
 .card.wide { grid-column: 1 / -1; }
 .ledger { width: 100%; border-collapse: collapse; font-size: 12px; }
-.ledger th { text-align: left; font-weight: 400; color: var(--mist); padding: 0 10px 6px 0; }
-.ledger td { padding: 6px 10px 6px 0; border-top: 1px solid rgba(50, 58, 92, .5); vertical-align: top; }
-.ledger td:nth-child(3) { font-family: ui-monospace, Consolas, monospace; font-size: 11px; white-space: nowrap; }
-.ledger td { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.ledger tr.bad td:nth-child(4) { color: var(--rose); }
+.ledger th { text-align: left; padding: 0 10px 6px 0; color: #b8a882; font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+.ledger td { padding: 6px 10px 6px 0; border-top: 1px solid var(--hair); vertical-align: top; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ledger td:nth-child(3) { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+.ledger tr.bad td:nth-child(4) { color: var(--rose-soft); }
 .ledger tr.quiet td { color: var(--mist); }
-.form .row select { width: auto; flex: none; }
+dl.flows { display: grid; gap: 0; margin: 0; }
+dl.flows > div { display: grid; gap: 3px; padding: 10px 0; border-top: 1px solid var(--hair); }
+dl.flows > div:first-child { border-top: 0; padding-top: 2px; }
+dl.flows dt { font-weight: 600; font-size: 13px; }
+dl.flows dd { margin: 0; font-size: 12px; color: var(--mist); line-height: 1.5; }
+dl.flows dd.hosts { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--mint); overflow-wrap: anywhere; }
 
 /* ---- the menu on a right click ---- */
 .menu {
@@ -577,43 +752,40 @@ legend { color: var(--mist); font-size: 12px; padding: 0 6px; }
   z-index: 8;
   display: grid;
   min-width: 190px;
-  padding: 5px;
-  border-radius: 12px;
-  background: var(--slate-up);
-  box-shadow: 0 16px 40px rgba(4, 6, 14, .6), inset 0 0 0 1px var(--edge);
+  border: 2px solid transparent;
+  border-image: linear-gradient(to bottom, var(--brass-dark), var(--brass-deep)) 1;
+  background: var(--night);
+  box-shadow: 0 0 0 1px rgba(1, 10, 19, .5), 0 16px 40px rgba(0, 0, 0, .65);
   animation: view-in .12s var(--ease);
 }
-.menu button { padding: 8px 12px; border-radius: 8px; background: none; text-align: left; font-size: 13px; }
-.menu button:hover, .menu button:focus-visible { background: var(--ink); outline: none; }
+.menu button { height: 30px; padding: 0 14px; color: var(--sand); font-size: 12.5px; text-align: left; }
+.menu button:hover, .menu button:focus-visible { background: var(--slate); color: var(--paper); outline: none; }
 
 /* A button that is only its picture. */
-button.glyph { flex: none; display: grid; place-items: center; width: 40px; padding: 0; align-self: stretch; color: var(--mist); }
+button.glyph { flex: none; display: grid; place-items: center; width: 34px; padding: 0; align-self: stretch; color: var(--brass); }
 button.glyph:hover { color: var(--paper); }
 button.glyph svg { width: 16px; height: 16px; }
 button.glyph:disabled svg { animation: turning .9s linear infinite; }
 @keyframes turning { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { button.glyph:disabled svg { animation: none; } }
-/* The record gives way before the level does. */
-.account .detail .record { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-dl.flows { display: grid; gap: 0; margin: 0; }
-dl.flows > div { display: grid; gap: 3px; padding: 10px 0; border-top: 1px solid rgba(50, 58, 92, .5); }
-dl.flows > div:first-child { border-top: 0; padding-top: 2px; }
-dl.flows dt { font-weight: 600; font-size: 13px; }
-dl.flows dd { margin: 0; font-size: 12px; color: var(--mist); line-height: 1.5; }
-dl.flows dd.hosts { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--mint); overflow-wrap: anywhere; }
-.account .detail { gap: 10px; }
-.account .detail .record { flex: none; }
-.account .detail .key { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- a narrow window: the bar gives up words before it gives up room ---- */
 .tight { display: none; }
-@media (max-width: 1000px) {
-  .bar { gap: 8px; padding-inline: 16px; }
-  #filter { min-width: 110px; }
-  .seg button { padding: 6px 8px; }
-  .tools { gap: 8px; }
-  .tools select { max-width: 112px; }
+@media (max-width: 1060px) {
+  .bar { margin-inline: 16px; gap: 6px; }
+  .titlebar, .banner { margin-inline: 16px; }
+  main { padding-inline: 16px 6px; }
+  #message { left: 16px; right: 16px; }
+  #filter { min-width: 84px; }
+  .seg button { padding: 0 6px; letter-spacing: .04em; }
+  .tools { gap: 6px; }
+  .tools select { max-width: 104px; padding-left: 8px; }
+  #add { padding-inline: 12px; }
   .roomy { display: none; }
   .tight { display: inline; }
-  #accounts.rows .detail span:not(.record) { display: none; }
+  /* And a row is who, where it stands, and the button. */
+  #accounts.rows .go { grid-template-columns: auto minmax(110px, 1.3fr) minmax(164px, 1fr); gap: 12px; padding-left: 12px; }
+  #accounts.rows .detail { display: none; }
+  #accounts.rows .rank-line b { font-size: 12.5px; letter-spacing: .03em; }
+  #accounts.rows .alt { padding: 0 8px; }
 }

@@ -10,6 +10,7 @@ in for it, so every screen can be exercised without Windows or Riot Client.
 import asyncio
 import json
 import pathlib
+import re
 import sys
 
 from playwright.async_api import async_playwright
@@ -97,6 +98,9 @@ async def main():
         page = await browser.new_page(viewport={"width": 1080, "height": 700})
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
+        # Everything the page asks for, to see that none of it is elsewhere.
+        asked = []
+        page.on("request", lambda r: asked.append(r.url))
         await page.add_init_script(BACKEND)
         await page.goto((UI / "index.html").as_uri())
         await page.wait_for_timeout(500)
@@ -107,6 +111,9 @@ async def main():
                 await page.screenshot(path=str(SHOTS / f"{name}.png"))
 
         text = lambda sel: page.inner_text(sel)
+        # The same, as it is written rather than as the theme sets it: headings
+        # and ranks are shown in capitals.
+        written = lambda sel: page.text_content(sel)
         names = lambda: page.eval_on_selector_all("#accounts .account .name > span:first-child", "els => els.map(e => e.textContent)")
         calls = lambda name: page.evaluate("n => window.__calls.filter(c => c[0] === n).map(c => c[1])", name)
 
@@ -146,7 +153,8 @@ async def main():
         check("a ban takes the place of the unused-session warning", "12 gündür açılmadı" not in rows)
         check("an unused session is flagged", "9 gündür açılmadı" in rows)
         check("a note shows on its account", "duo için" in rows)
-        check("rank is shown as tier and points", "Gold II" in rows and "45 LP" in rows)
+        check("rank is shown as tier and points", "Gold II" in await written("#accounts") and "45 LP" in rows)
+        check("an English tier name is capitalised as English, not as Turkish", await page.inner_text('#accounts .account[data-id="smurf"] .rank-line b') == "DIAMOND IV", await page.inner_text('#accounts .account[data-id="smurf"] .rank-line b'))
         tiers = await page.eval_on_selector_all("#accounts .account", "els => els.map(e => e.dataset.tier || '')")
         check("each account carries its tier", tiers == ["gold", "diamond", "", "master"], str(tiers))
         fills = await page.eval_on_selector_all("#accounts .account .lp i", "els => els.map(e => e.style.getPropertyValue('--lp'))")
@@ -160,6 +168,8 @@ async def main():
         widths = await page.eval_on_selector_all("#accounts .account .name > span:first-child", "els => els.map(e => e.scrollWidth <= e.clientWidth + 1)")
         check("no name is cut short by its tags", all(widths), str(widths))
         check("nothing overflows sideways", await page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        bar = await page.evaluate("(() => { const f = document.getElementById('filter'); return [Math.round(f.getBoundingClientRect().width - parseFloat(getComputedStyle(f).minWidth)), document.getElementById('add').getBoundingClientRect().right <= document.querySelector('.bar').getBoundingClientRect().right + 1]; })()")
+        check("the bar ends where its line ends, with room to spare", bar[0] >= 24 and bar[1], str(bar))
         await shot("cards")
 
         # ---- order, layout and filters
@@ -199,7 +209,7 @@ async def main():
         await page.fill("#filter", "duo")
         check("search looks in notes too", await names() == ["Smurf"])
         await page.fill("#filter", "yok böyle biri")
-        check("an empty result says what to do", "Eşleşen hesap yok" in await text("#accounts"))
+        check("an empty result says what to do", "Eşleşen hesap yok" in await written("#accounts"))
         await page.fill("#filter", "")
 
         # ---- the track
@@ -410,6 +420,25 @@ async def main():
         await shot("wizard")
         await page.click("#set-data")
         check("leaving the wizard by the rail closes it", await page.is_hidden("#view-wizard"))
+
+        # ---- the smallest window the app allows
+        await page.click('#rail .nav[data-view="list"]')
+        await page.set_viewport_size({"width": 860, "height": 560})
+        await page.wait_for_timeout(150)
+        check("at its smallest, the window still holds the bar and the cards", await page.evaluate("document.documentElement.scrollWidth <= window.innerWidth && document.getElementById('add').getBoundingClientRect().right <= window.innerWidth"))
+        fits = "(() => { const f = document.getElementById('filter'); return Math.round(f.getBoundingClientRect().width - parseFloat(getComputedStyle(f).minWidth)); })()"
+        room = await page.evaluate(fits)
+        check("on one line, with room to spare should a font run wider", room >= 24 and len(set(await page.eval_on_selector_all(".bar > :not([hidden])", "els => els.map(e => Math.round(e.getBoundingClientRect().top))"))) == 1, str(room))
+        await shot("smallest")
+        await page.set_viewport_size({"width": 1080, "height": 700})
+
+        # ---- the theme keeps the window's promise: nothing from outside, nothing of Riot's
+        style = (UI / "style.css").read_text(encoding="utf-8")
+        drawn = re.findall(r"url\(\s*[\"']?([^\"')]*)", style)
+        check("the stylesheet ships no font, and every picture in it is drawn in it", "@font-face" not in style and "@import" not in style and drawn and all(u.startswith("data:image/svg+xml,") for u in drawn), str([u[:40] for u in drawn]))
+        outside = [u for u in asked if not u.startswith(("file:", "data:"))]
+        check("the page asked for nothing outside itself", not outside, "; ".join(outside))
+        check("corners are square and the brand keeps its own letters", await page.evaluate("getComputedStyle(document.querySelector('#accounts .account')).borderRadius") == "0px" and await page.inner_text("#rail .brand") == "QUICKSWITCH", await page.inner_text("#rail .brand"))
 
         check("no script errors", not errors, "; ".join(errors))
         await browser.close()

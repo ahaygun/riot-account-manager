@@ -355,6 +355,16 @@ $("rail-lock").addEventListener("click", async () => {
   refresh();
 });
 
+// The theme sets headings and buttons in capitals, and the page is Turkish,
+// where "i" capitalises to "İ". A name that is not Turkish (Riot, Diamond)
+// goes in a span that says so, and keeps its own letters: RIOT, not RİOT.
+function asWritten(text) {
+  const span = document.createElement("span");
+  span.lang = "en";
+  span.textContent = text;
+  return span;
+}
+
 // "Gold II 45 LP" in its parts; null without a rank.
 function rankParts(rank) {
   if (!rank) return null;
@@ -524,6 +534,7 @@ function row(a, i) {
   line.className = "rank-line";
   const tier = document.createElement("b");
   tier.textContent = rank ? `${rank.tier} ${rank.division}`.trim() : a.game === "valorant" ? "VALORANT" : a.level ? "Derecesiz" : "Rank bilinmiyor";
+  if (rank) tier.lang = "en"; // tier names are English
   line.append(tier);
   if (rank) {
     const lp = document.createElement("span");
@@ -588,7 +599,8 @@ function row(a, i) {
     const open = document.createElement("button");
     open.type = "button";
     open.className = "open";
-    open.textContent = active ? (a.game === "client" ? "Riot Client'ı aç" : "Oyunu aç") : "Hesaba geç";
+    if (active && a.game === "client") open.append(asWritten("Riot Client"), "'ı aç");
+    else open.textContent = active ? "Oyunu aç" : "Hesaba geç";
     open.disabled = busy !== null;
     open.addEventListener("click", () => switchTo(a, rowGame(a)));
     acts.append(open);
@@ -1209,8 +1221,8 @@ function wizardName(mode) {
   $("wiz-game").value = "lol";
   $("wiz-username").value = "";
   $("wiz-pass").value = "";
-  $("wiz-creds-legend").textContent =
-    mode === "session" ? "Oturum dolarsa otomatik giriş için (isteğe bağlı)" : "Riot giriş bilgileri";
+  if (mode === "session") $("wiz-creds-legend").textContent = "Oturum dolarsa otomatik giriş için (isteğe bağlı)";
+  else $("wiz-creds-legend").replaceChildren(asWritten("Riot"), " giriş bilgileri");
   wizardStep("name");
   $("wiz-name-input").focus();
 }
