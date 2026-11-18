@@ -1061,3 +1061,23 @@ fn a_lock_change_cut_short_is_finished_or_undone_on_the_next_start() {
     sw.switch("ana-hesap", None).unwrap();
     assert!(sw.view().unwrap().accounts[0].has_password);
 }
+
+#[test]
+fn an_account_id_in_other_letter_case_is_still_the_same_account() {
+    let f = fixture("idcase");
+    two_accounts(&f);
+    // Ana's id was stored in upper case (as another Riot interface may
+    // spell it); the client reports it in lower case.
+    let path = f.sw.env.data_dir.join("accounts.bin");
+    let vault = quickswitch_core::vault::Vault::new(f.sw.env.data_dir.join("vault.json"));
+    let mut state: serde_json::Value = serde_json::from_slice(&vault.open(&fs::read(&path).unwrap()).unwrap()).unwrap();
+    state["accounts"][0]["puuid"] = "PUUID-A".into();
+    fs::write(&path, quickswitch_core::vault::seal_with(None, &serde_json::to_vec(&state).unwrap()).unwrap()).unwrap();
+
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn, "accepted, not treated as someone else");
+    let v = f.sw.view().unwrap();
+    assert!(v.accounts[0].has_session, "the saved session was not thrown away");
+    assert_eq!(v.active.as_deref(), Some("ana-hesap"));
+    assert!(!f.sw.observe_live().unwrap() || f.sw.view().unwrap().active.as_deref() == Some("ana-hesap"));
+}

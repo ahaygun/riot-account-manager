@@ -699,7 +699,7 @@ impl Switcher {
         let puuid = seen.as_ref().and_then(|i| i.puuid.clone()).or(file.sub);
 
         let state = self.state()?;
-        if let Some(existing) = puuid.as_ref().and_then(|p| state.accounts.iter().find(|a| a.puuid.as_ref() == Some(p))) {
+        if let Some(existing) = puuid.as_ref().and_then(|p| state.accounts.iter().find(|a| same_account(a.puuid.as_deref(), p))) {
             let existing_name = existing.name.clone();
             self.keep_live_session(&cfg, seen.as_ref())?;
             return Err(Error::AlreadySaved(existing_name));
@@ -955,7 +955,7 @@ impl Switcher {
         let seen = self.api.identity().unwrap_or_default();
         let game = self.update_account(id, |acc, _| {
             if let (Some(mine), Some(theirs)) = (&acc.puuid, &seen.puuid) {
-                if mine != theirs {
+                if !same_account(Some(mine), theirs) {
                     return Ok(None); // someone signed in to a different account
                 }
             }
@@ -1001,7 +1001,7 @@ impl Switcher {
                 acc.hash.clear();
                 acc.needs_login = true;
             }
-            let real = signed_in.and_then(|p| state.accounts.iter().find(|a| a.id != id && a.puuid.as_deref() == Some(p)));
+            let real = signed_in.and_then(|p| state.accounts.iter().find(|a| a.id != id && same_account(a.puuid.as_deref(), p)));
             let found = real.map(|a| (a.id.clone(), a.name.clone()));
             state.current = found.as_ref().map(|(id, _)| id.clone());
             found.map(|(_, name)| name)
@@ -1248,7 +1248,7 @@ impl Switcher {
 /// exact id match wins. Otherwise the account whose files we last put in
 /// place, as long as it has not been tied to a different id.
 fn owner_by<'a>(state: &'a State, puuid: Option<&String>) -> Option<&'a Account> {
-    if let Some(found) = puuid.and_then(|p| state.accounts.iter().find(|a| a.puuid.as_ref() == Some(p))) {
+    if let Some(found) = puuid.and_then(|p| state.accounts.iter().find(|a| same_account(a.puuid.as_deref(), p))) {
         return Some(found);
     }
     let current = state.current.as_ref().and_then(|id| state.accounts.iter().find(|a| &a.id == id))?;
@@ -1258,8 +1258,16 @@ fn owner_by<'a>(state: &'a State, puuid: Option<&String>) -> Option<&'a Account>
 /// Who is the current account, given that the client says `puuid` is
 /// signed in: the account with that id; otherwise the present one if it
 /// has no id yet (it may be signing in for the first time); otherwise none.
+/// Whether a stored account id and one reported by Riot are the same
+/// account. Riot account ids are UUIDs, and different Riot interfaces may
+/// spell the same one in different letter case; since a mismatch can make
+/// a saved session be thrown away, case never counts.
+fn same_account(stored: Option<&str>, reported: &str) -> bool {
+    stored.is_some_and(|s| s.eq_ignore_ascii_case(reported))
+}
+
 fn live_owner(state: &State, puuid: &str) -> Option<String> {
-    if let Some(known) = state.accounts.iter().find(|a| a.puuid.as_deref() == Some(puuid)) {
+    if let Some(known) = state.accounts.iter().find(|a| same_account(a.puuid.as_deref(), puuid)) {
         return Some(known.id.clone());
     }
     let current = state.current.as_ref().and_then(|id| state.accounts.iter().find(|a| &a.id == id))?;
