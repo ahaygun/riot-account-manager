@@ -171,8 +171,12 @@ pub struct Timing {
     /// "Signed out" must hold this long before we believe it: a starting
     /// client reports signed out for a moment before it loads its session.
     pub signed_out_grace: Duration,
-    /// Time for the login page to render before typing.
+    /// Time for the login page to render before typing, when the typer
+    /// cannot see the page for itself.
     pub ui_load: Duration,
+    /// When a saved session was put in place, how long the login page must
+    /// stay on screen before it is taken to mean the session was refused.
+    pub page_hold: Duration,
     /// How long a typed login may take to go through.
     pub login_wait: Duration,
     /// If a typed login shows no sign of going through for this long, Enter
@@ -202,6 +206,7 @@ impl Default for Timing {
             boot_wait: Duration::from_secs(60),
             signed_out_grace: Duration::from_secs(8),
             ui_load: Duration::from_secs(3),
+            page_hold: Duration::from_millis(1200),
             login_wait: Duration::from_secs(90),
             submit_retry: Duration::from_secs(5),
             game_start_wait: Duration::from_secs(15),
@@ -945,7 +950,27 @@ impl Switcher {
         // disk to load: it is also the time the login page needs before it
         // takes a typed sign-in. A shorter one typed into a page that was
         // not ready, and the sign-in went nowhere.
+        //
+        // It is cut short by one thing only: the login page itself. The
+        // client shows its username and password fields once it has decided
+        // that it wants a sign-in, so a typer that can see them (see
+        // `LoginTyper::login_page_ready`) knows both that the session was
+        // not taken and that the page is ready, without guessing at either.
         let grace = t.signed_out_grace;
+        let has_password = self.env.secret_file(id).is_file();
+        // With a session of ours on disk the page has to stay up a while: a
+        // client still loading that session must not be typed over.
+        let hold = if self.env.snapshot_file(id).is_file() { t.page_hold } else { Duration::ZERO };
+        let exe = self.riot_exe(&cfg).ok();
+        let log = |line: &str| self.log(line);
+        let ask = |on: bool| (self.ask_for_focus)(on);
+        let target = UiTarget {
+            processes: &cfg.ui_processes,
+            install_dir: exe.as_deref().and_then(|e| e.parent()),
+            ask_for_focus: &ask,
+            cancelled,
+            log: &log,
+        };
 
         // 1. Wait for the client to answer at all.
         (self.on_step)("waiting", id);
@@ -960,6 +985,10 @@ impl Switcher {
 
         // 2. Signed in, or signed out for long enough to believe it.
         let mut signed_out_since: Option<Instant> = None;
+        // Since when the login page has been seen at every look, and how
+        // many looks that has been.
+        let mut page_since: Option<(Instant, u32)> = None;
+        let mut page_ready = false;
         loop {
             if cancelled() {
                 return Ok(LoginOutcome::Unknown);
@@ -976,8 +1005,23 @@ impl Switcher {
                     if signed_out_since.get_or_insert_with(Instant::now).elapsed() >= grace {
                         break;
                     }
+                    // Only worth a look when there is something to type.
+                    if has_password && self.typer.login_page_ready(&target) == Some(true) {
+                        let (since, looks) = page_since.get_or_insert((Instant::now(), 0));
+                        *looks += 1;
+                        // Twice in a row at least: one sighting may be a
+                        // page on its way in or out.
+                        if *looks >= 2 && since.elapsed() >= hold {
+                            page_ready = true;
+                            self.log(&format!("switch: login page is up {} ms after launch; not waiting further", start.elapsed().as_millis()));
+                            break;
+                        }
+                    } else {
+                        page_since = None;
+                    }
                 }
                 LoginState::Unknown => {
+                    page_since = None;
                     if self.procs.running(&cfg.client_processes).is_empty() {
                         return Ok(LoginOutcome::Unknown);
                     }
@@ -993,13 +1037,15 @@ impl Switcher {
                 "Oturumun süresi dolmuş. Riot Client'ta \"Oturumu açık tut\" işaretli giriş yap; kayıt kendiliğinden yenilenir.".into(),
             ));
         };
-        // The login page needs its window: wait for the process that owns
-        // it, then give the page time to render.
-        let waiting = Instant::now();
-        while self.procs.running(&cfg.ui_processes).is_empty() && waiting.elapsed() < t.ui_load * 5 && !cancelled() {
-            std::thread::sleep(t.poll);
+        // The login page needs its window: unless the page was seen, wait
+        // for the process that owns it, then give the page time to render.
+        if !page_ready {
+            let waiting = Instant::now();
+            while self.procs.running(&cfg.ui_processes).is_empty() && waiting.elapsed() < t.ui_load * 5 && !cancelled() {
+                std::thread::sleep(t.poll);
+            }
+            std::thread::sleep(t.ui_load);
         }
-        std::thread::sleep(t.ui_load);
         if cancelled() {
             return Ok(LoginOutcome::Unknown);
         }
@@ -1007,16 +1053,6 @@ impl Switcher {
             return self.confirm_signed_in(id, game, false, false, cancelled);
         }
         self.log(&format!("switch: typing the sign-in {} ms after launch", start.elapsed().as_millis()));
-        let exe = self.riot_exe(&cfg).ok();
-        let log = |line: &str| self.log(line);
-        let ask = |on: bool| (self.ask_for_focus)(on);
-        let target = UiTarget {
-            processes: &cfg.ui_processes,
-            install_dir: exe.as_deref().and_then(|e| e.parent()),
-            ask_for_focus: &ask,
-            cancelled,
-            log: &log,
-        };
         (self.on_step)("signing_in", id);
         // What Riot says before anything is sent. A refusal standing here is
         // left over from an earlier attempt (a wrong password typed by hand
@@ -1027,6 +1063,11 @@ impl Switcher {
             self.typer.type_login(&creds.username, &creds.password, &target)
         };
         if let Err(why) = typed {
+            // Signed in all the same (a session that loaded late, or the
+            // user's own hands): then there was nothing to type.
+            if matches!(self.api.login(), LoginState::SignedIn { .. }) {
+                return self.confirm_signed_in(id, game, false, false, cancelled);
+            }
             self.set_needs_login(id, true)?;
             return Ok(LoginOutcome::NeedsLogin(why));
         }

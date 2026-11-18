@@ -38,6 +38,16 @@ pub struct UiTarget<'a> {
 pub trait LoginTyper: Send + Sync {
     fn type_login(&self, username: &str, password: &str, target: &UiTarget) -> Result<(), String>;
 
+    /// Whether the client's login page is on screen with its fields ready
+    /// to be filled: `Some(true)` or `Some(false)` from a typer that can
+    /// look, `None` from one that cannot. Seeing the page means the client
+    /// wants a sign-in now, so the caller need not wait out the time it
+    /// otherwise allows for a session to load and a page to render. Must be
+    /// quick and must change nothing.
+    fn login_page_ready(&self, _target: &UiTarget) -> Option<bool> {
+        None
+    }
+
     /// Presses Enter once more on a login that was typed but does not seem
     /// to have been sent. Types nothing else. Returns whether it pressed.
     fn submit_again(&self, _target: &UiTarget) -> bool {
@@ -72,6 +82,10 @@ impl LoginTyper for WindowTyper {
 
     fn submit_again(&self, target: &UiTarget) -> bool {
         win::submit_again(target)
+    }
+
+    fn login_page_ready(&self, target: &UiTarget) -> Option<bool> {
+        Some(win::login_page_ready(target))
     }
 }
 
@@ -227,15 +241,32 @@ mod win {
     /// titled, uncloaked top-level window. Riot Client also owns small or
     /// hidden helper windows, which cannot be brought forward.
     fn find_window(target: &UiTarget) -> Option<Hwnd> {
-        let mut search = Search { pids: ui_pids(target), found: Vec::new() };
-        if search.pids.is_empty() {
+        let pids = ui_pids(target);
+        if pids.is_empty() {
             (target.log)("login: no Riot Client UI process found");
             return None;
         }
+        let (hwnd, candidates) = window_of(&pids);
+        (target.log)(&format!("login: {} UI process(es), {} candidate window(s)", pids.len(), candidates));
+        hwnd
+    }
+
+    /// The same for processes already looked up, and how many windows were
+    /// in the running.
+    fn window_of(pids: &[u32]) -> (Option<Hwnd>, usize) {
+        let mut search = Search { pids: pids.to_vec(), found: Vec::new() };
         // SAFETY: the callback only touches `search`, which lives across the call.
         unsafe { EnumWindows(visit, &mut search as *mut Search as isize) };
-        (target.log)(&format!("login: {} UI process(es), {} candidate window(s)", search.pids.len(), search.found.len()));
-        search.found.into_iter().filter(|(_, area)| *area > 200 * 200).max_by_key(|(_, area)| *area).map(|(h, _)| h)
+        let candidates = search.found.len();
+        (search.found.into_iter().filter(|(_, area)| *area > 200 * 200).max_by_key(|(_, area)| *area).map(|(h, _)| h), candidates)
+    }
+
+    /// The client's window as it is right now, with the processes it may
+    /// belong to. Says nothing in the log: it is asked several times a second.
+    fn look(target: &UiTarget) -> Option<(Hwnd, Vec<u32>)> {
+        let pids = ui_pids(target);
+        let hwnd = window_of(&pids).0?;
+        Some((hwnd, pids))
     }
 
     fn foreground_pid() -> u32 {
@@ -428,6 +459,33 @@ mod win {
             root: IUIAutomationElement,
         }
 
+        /// The page inside the window `hwnd`. COM must be up on this thread.
+        fn open(hwnd: *mut std::ffi::c_void) -> windows::core::Result<Page> {
+            // SAFETY: COM calls; a stale handle comes back as an error value.
+            unsafe {
+                let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+                let root = automation.ElementFromHandle(HWND(hwnd))?;
+                Ok(Page { automation, root })
+            }
+        }
+
+        /// Both fields belong to one of `pids`. A field of any other
+        /// process is never written to, and never taken for the login page.
+        fn owned(fields: [&IUIAutomationElement; 2], pids: &[u32]) -> bool {
+            // SAFETY: as in `open`.
+            fields.into_iter().all(|f| unsafe { f.CurrentProcessId() }.is_ok_and(|pid| pids.contains(&(pid as u32))))
+        }
+
+        /// Whether the window `hwnd` shows the login page right now: a
+        /// username and a password field, both Riot Client's own. Changes
+        /// nothing on the page.
+        pub fn page_ready(hwnd: *mut std::ffi::c_void, pids: &[u32]) -> bool {
+            // SAFETY: plain COM start-up for this thread; undone by `Com`.
+            let _com = Com(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok());
+            let Ok(page) = open(hwnd) else { return false };
+            page.fields().is_some_and(|(user, pass)| owned([&user, &pass], pids))
+        }
+
         impl Page {
             fn all(&self, kind: UIA_CONTROLTYPE_ID) -> windows::core::Result<Vec<IUIAutomationElement>> {
                 // SAFETY (whole block): COM calls on live interface pointers;
@@ -472,44 +530,50 @@ mod win {
             }
         }
 
-        /// Fills in the login page of the window `hwnd` and presses its
-        /// sign-in button. `pids` are the Riot Client UI processes: a field
-        /// that belongs to any other process is never written to.
+        /// Fills in the login page and presses its sign-in button. `look`
+        /// gives the client's window as it is at that moment and the Riot
+        /// Client UI processes: a field that belongs to any other process
+        /// is never written to.
+        ///
+        /// The window is asked for afresh at every look. Riot Client opens
+        /// with a small window and replaces it with the real one; the page
+        /// is found in whichever is there once it has its fields, so there
+        /// is no need to wait for the window to settle first.
         ///
         /// The sign-in button is not looked for by its name, which changes
         /// with the language: it is the one button that cannot be pressed
         /// while the fields are empty and can be once they are filled. If
         /// no button behaves like that, the page did not take the text; the
         /// fields are emptied again and the caller types instead.
-        pub fn sign_in(hwnd: *mut std::ffi::c_void, pids: &[u32], username: &str, password: &str, log: &dyn Fn(&str), cancelled: &dyn Fn() -> bool) -> Result<Outcome, String> {
+        pub fn sign_in(look: &dyn Fn() -> Option<(*mut std::ffi::c_void, Vec<u32>)>, username: &str, password: &str, log: &dyn Fn(&str), cancelled: &dyn Fn() -> bool) -> Result<Outcome, String> {
             let fail = |what: &str, e: windows::core::Error| format!("{what}: {:#x}", e.code().0);
             // SAFETY: plain COM start-up for this thread; undone by `Com`.
             let _com = Com(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok());
-            // SAFETY: as above.
-            let automation: IUIAutomation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.map_err(|e| fail("no automation", e))?;
-            // SAFETY: as above; a stale handle is an error value.
-            let root = unsafe { automation.ElementFromHandle(HWND(hwnd)) }.map_err(|e| fail("no window element", e))?;
-            let page = Page { automation, root };
 
             // The page builds its accessibility tree only once somebody
             // asks for it, so the first looks come back empty.
             let start = Instant::now();
-            let (user, pass) = loop {
-                if let Some(found) = page.fields() {
-                    break found;
-                }
+            let (page, user, pass) = loop {
+                let why = match look() {
+                    None => "no Riot Client window",
+                    Some((hwnd, pids)) => match open(hwnd) {
+                        Err(_) => "the window gave no automation element",
+                        Ok(page) => match page.fields() {
+                            None => "login fields not found",
+                            Some((user, pass)) => {
+                                if !owned([&user, &pass], &pids) {
+                                    return Err("a login field belongs to another process".into());
+                                }
+                                break (page, user, pass);
+                            }
+                        },
+                    },
+                };
                 if cancelled() || start.elapsed() > Duration::from_secs(12) {
-                    return Err("login fields not found".into());
+                    return Err(why.into());
                 }
-                sleep(Duration::from_millis(400));
+                sleep(Duration::from_millis(250));
             };
-            for field in [&user, &pass] {
-                // SAFETY: as above.
-                let pid = unsafe { field.CurrentProcessId() }.map_err(|e| fail("no owner", e))?;
-                if !pids.contains(&(pid as u32)) {
-                    return Err("a login field belongs to another process".into());
-                }
-            }
             let before = page.buttons().map_err(|e| fail("no buttons", e))?;
             log(&format!("login: page found after {} ms ({} buttons)", start.elapsed().as_millis(), before.len()));
 
@@ -546,21 +610,30 @@ mod win {
                 other => log(&format!("login: {} checkboxes on the page; stay signed in left alone", other.len())),
             }
 
-            // The button that woke up when the fields were filled.
-            sleep(Duration::from_millis(500));
-            let after = match page.buttons() {
-                Ok(after) => after,
-                Err(e) => return undo(fail("no buttons", e)),
+            // The button that woke up when the fields were filled. It is
+            // pressed as soon as it has, and given two seconds to: a page
+            // that has only just appeared can be slow to notice its fields.
+            let filled = Instant::now();
+            let submit = loop {
+                let after = match page.buttons() {
+                    Ok(after) => after,
+                    Err(e) => return undo(fail("no buttons", e)),
+                };
+                let woke: Vec<IUIAutomationElement> = if after.len() == before.len() {
+                    before.iter().zip(&after).filter(|((_, was), (_, is))| !*was && *is).map(|(_, (b, _))| b.clone()).collect()
+                } else {
+                    Vec::new()
+                };
+                if let [submit] = woke.as_slice() {
+                    break submit.clone();
+                }
+                if woke.len() > 1 || cancelled() || filled.elapsed() >= Duration::from_secs(2) {
+                    let on = |list: &[(IUIAutomationElement, bool)]| list.iter().filter(|(_, on)| *on).count();
+                    return undo(format!("buttons enabled {}/{} before, {}/{} after", on(&before), before.len(), on(&after), after.len()));
+                }
+                sleep(Duration::from_millis(100));
             };
-            let woke: Vec<&IUIAutomationElement> = if after.len() == before.len() {
-                before.iter().zip(&after).filter(|((_, was), (_, is))| !*was && *is).map(|(_, (b, _))| b).collect()
-            } else {
-                Vec::new()
-            };
-            let [submit] = woke.as_slice() else {
-                let on = |list: &[(IUIAutomationElement, bool)]| list.iter().filter(|(_, on)| *on).count();
-                return undo(format!("buttons enabled {}/{} before, {}/{} after", on(&before), before.len(), on(&after), after.len()));
-            };
+            log(&format!("login: sign-in button ready {} ms after the fields were filled", filled.elapsed().as_millis()));
             // SAFETY: as above.
             match unsafe { submit.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId).and_then(|b| b.Invoke()) } {
                 Ok(()) => Ok(Outcome::Submitted),
@@ -579,14 +652,20 @@ mod win {
         true
     }
 
+    /// Whether the login page is on screen, ready to be filled. Looks
+    /// only; nothing is brought forward and nothing is written.
+    pub fn login_page_ready(target: &UiTarget) -> bool {
+        look(target).is_some_and(|(hwnd, pids)| uia::page_ready(hwnd, &pids))
+    }
+
     pub fn type_login(username: &str, password: &str, target: &UiTarget) -> Result<(), String> {
         let lost = || {
             (target.log)(&format!("login: lost the window while typing; foreground is {}", process_name(foreground_pid())));
             "Riot Client penceresi yazarken öne çıkmadı; şifrenin başka bir yere gitmemesi için yazma durduruldu.".to_string()
         };
-        let hwnd = wait_for_steady_window(target).ok_or("Riot Client penceresi bulunamadı.")?;
-        // First without the keyboard: that works behind other windows.
-        match uia::sign_in(hwnd, &ui_pids(target), username, password, target.log, target.cancelled) {
+        // First without the keyboard: that works behind other windows, and
+        // it finds the page for itself, so nothing is waited for first.
+        match uia::sign_in(&|| look(target), username, password, target.log, target.cancelled) {
             Ok(uia::Outcome::Submitted) => {
                 (target.log)("login: signed in through the page, without the keyboard");
                 return Ok(());
@@ -594,6 +673,8 @@ mod win {
             Ok(uia::Outcome::NotTaken) => {}
             Err(why) => (target.log)(&format!("login: automated sign-in not possible ({why}); typing instead")),
         }
+        // Keys go to a window: this way needs one that has stopped moving.
+        let hwnd = wait_for_steady_window(target).ok_or("Riot Client penceresi bulunamadı.")?;
         if !focus(hwnd, target) && !wait_for_click(target) {
             return Err("Riot Client penceresi öne getirilemedi; şifre yazılmadı. Riot Client'ta elle giriş yapabilirsin.".into());
         }

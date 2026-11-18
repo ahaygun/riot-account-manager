@@ -48,6 +48,11 @@ struct Sim {
     auth_problem_is_old: bool,
     /// Windows refuses to start the client: it wants administrator rights.
     elevated: bool,
+    /// What the typer sees of the login page: `None` when it cannot look.
+    page_up: Option<bool>,
+    page_looks: u32,
+    /// Who the client signs in by itself while the typer is failing.
+    signs_in_meanwhile: Option<(String, String)>,
 }
 
 /// One object plays the processes, the local API and the keyboard, since
@@ -198,6 +203,9 @@ impl LoginTyper for World {
     fn type_login(&self, username: &str, password: &str, _target: &UiTarget) -> Result<(), String> {
         let mut s = self.sim();
         if let Some(e) = s.typer_error.clone() {
+            if let Some(who) = s.signs_in_meanwhile.take() {
+                s.signed_in = Some(who);
+            }
             return Err(e);
         }
         s.typed.push((username.into(), password.into()));
@@ -205,6 +213,13 @@ impl LoginTyper for World {
             s.submit();
         }
         Ok(())
+    }
+
+    fn login_page_ready(&self, _target: &UiTarget) -> Option<bool> {
+        let mut s = self.sim();
+        s.page_looks += 1;
+        // The page is there only while the client is up and signed out.
+        s.page_up.map(|up| up && s.signed_in.is_none() && !s.running.is_empty())
     }
 
     fn submit_again(&self, _target: &UiTarget) -> bool {
@@ -268,6 +283,7 @@ fn switcher(env: Env, w: &Arc<World>) -> Switcher {
         boot_wait: ms(200),
         signed_out_grace: ms(30),
         ui_load: ms(5),
+        page_hold: ms(20),
         login_wait: ms(150),
         submit_retry: ms(60),
         game_start_wait: ms(30),
@@ -529,6 +545,104 @@ fn a_password_only_account_waits_the_grace_out_before_typing() {
     assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
     assert!(started.elapsed() >= Duration::from_millis(600), "the page gets its time: {:?}", started.elapsed());
     assert_eq!(f.w.sim().enters_again, 0, "a sign-in that goes through is left alone");
+}
+
+#[test]
+fn a_login_page_that_is_seen_is_filled_without_waiting_the_grace_out() {
+    let mut f = fixture("page-seen");
+    f.sw.timing.signed_out_grace = Duration::from_secs(5);
+    f.sw.timing.ui_load = Duration::from_secs(5);
+    {
+        let mut s = f.w.sim();
+        s.accepts = Some(("hunter2".into(), "puuid-P".into()));
+        s.page_up = Some(true);
+    }
+    let acc = f.sw.add_with_credentials("Şifreli", "user", "hunter2", Game::Lol).unwrap();
+    f.sw.switch(&acc.id, None).unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
+    assert!(started.elapsed() < Duration::from_secs(2), "neither the grace nor the render time was waited: {:?}", started.elapsed());
+    let s = f.w.sim();
+    assert_eq!(s.typed, vec![("user".to_string(), "hunter2".to_string())]);
+    assert!(s.page_looks >= 2, "one sighting is not enough: {}", s.page_looks);
+}
+
+#[test]
+fn a_login_page_that_is_not_there_yet_changes_nothing() {
+    let mut f = fixture("page-not-yet");
+    f.sw.timing.signed_out_grace = Duration::from_millis(600);
+    {
+        let mut s = f.w.sim();
+        s.accepts = Some(("hunter2".into(), "puuid-P".into()));
+        s.page_up = Some(false);
+    }
+    let acc = f.sw.add_with_credentials("Şifreli", "user", "hunter2", Game::Lol).unwrap();
+    f.sw.switch(&acc.id, None).unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
+    assert!(started.elapsed() >= Duration::from_millis(600), "{:?}", started.elapsed());
+    assert!(f.w.sim().page_looks > 2, "it kept looking");
+}
+
+#[test]
+fn over_a_saved_session_the_login_page_must_stay_up_before_it_is_believed() {
+    let mut f = fixture("page-hold");
+    two_accounts(&f);
+    f.sw.set_credentials("ana-hesap", "ana_user", "s3cret").unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
+    f.w.renew("expired-A");
+    f.sw.switch("smurf", None).unwrap();
+
+    f.sw.timing.signed_out_grace = Duration::from_secs(5);
+    f.sw.timing.page_hold = Duration::from_millis(300);
+    {
+        let mut s = f.w.sim();
+        s.accepts = Some(("s3cret".into(), "puuid-A".into()));
+        s.page_up = Some(true);
+    }
+    f.sw.switch("ana-hesap", None).unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn);
+    let took = started.elapsed();
+    assert!(took >= Duration::from_millis(300) && took < Duration::from_secs(2), "held, then typed: {took:?}");
+}
+
+#[test]
+fn a_saved_session_that_works_is_never_typed_over() {
+    let f = fixture("page-not-asked");
+    two_accounts(&f);
+    f.sw.set_credentials("ana-hesap", "ana_user", "s3cret").unwrap();
+    f.w.sim().page_up = Some(true);
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn);
+    assert!(f.w.sim().typed.is_empty());
+}
+
+#[test]
+fn without_a_password_nobody_looks_for_the_login_page() {
+    let f = fixture("page-no-password");
+    two_accounts(&f);
+    f.sw.switch("ana-hesap", None).unwrap();
+    f.w.renew("expired-A");
+    f.sw.switch("smurf", None).unwrap();
+    f.w.sim().page_up = Some(true);
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert!(matches!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::NeedsLogin(_)));
+    assert_eq!(f.w.sim().page_looks, 0);
+}
+
+#[test]
+fn a_typer_that_fails_while_the_client_signs_in_by_itself_is_not_a_failure() {
+    let f = fixture("typer-fails-signed-in");
+    {
+        let mut s = f.w.sim();
+        s.typer_error = Some("pencere bulunamadı".into());
+        s.signs_in_meanwhile = Some(("puuid-P".into(), "P-1".into()));
+    }
+    let acc = f.sw.add_with_credentials("Şifreli", "user", "hunter2", Game::Lol).unwrap();
+    f.sw.switch(&acc.id, None).unwrap();
+    assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
+    assert!(!f.sw.view().unwrap().accounts[0].account.needs_login);
 }
 
 #[test]
