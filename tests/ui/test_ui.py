@@ -22,7 +22,7 @@ STATE = {
     "accounts": [
         {"id": "ana", "name": "Ana Hesap", "game": "lol", "rank": "Gold II 45 LP", "level": 212, "riot_id": "Ana#TR1",
          "has_session": True, "has_password": True, "needs_login": False, "idle_days": None, "stale": False,
-         "hotkey": "Ctrl+Shift+Digit1", "note": "", "ban": None, "last_ok": 300, "updated": 300},
+         "hotkey": "Ctrl+Shift+Digit1", "note": "", "ban": None, "last_ok": 300, "updated": 300, "icon": 4567, "region": "tr"},
         {"id": "smurf", "name": "Smurf", "game": "both", "rank": "Diamond IV 3 LP", "level": 34, "riot_id": "Smurf#EUW",
          "has_session": True, "has_password": False, "needs_login": False, "idle_days": 12, "stale": True,
          "note": "duo için", "ban": {"until": None}, "last_ok": 100, "updated": 100},
@@ -31,12 +31,13 @@ STATE = {
          "note": "", "ban": {"until": "__IN_3_DAYS__"}, "last_ok": 200, "updated": 200},
         {"id": "eski", "name": "Eski Hesap", "game": "lol", "rank": "Master 312 LP", "level": 410, "riot_id": "Eski#TR1",
          "has_session": True, "has_password": False, "needs_login": False, "idle_days": 9, "stale": True,
-         "note": "", "ban": None, "last_ok": 50, "updated": 50},
+         "note": "", "ban": None, "last_ok": 50, "updated": 50, "lookup_problem": "not_found", "region": "tr"},
     ],
     "active": "ana", "client": {"running": True, "login": "signed_in"}, "unsaved_session": False, "in_game": False,
     "security": {"lock_enabled": True, "unlocked": True, "data_dir": "C:\\Users\\x\\AppData\\Local\\QuickSwitch",
                  "saved_sessions": 2, "saved_passwords": 2, "auto_lock_minutes": 15},
-    "pending": None, "autostart": True, "version": "0.5.0",
+    "pending": None, "autostart": True, "version": "0.6.0",
+    "net": {"decided": False, "online": False, "lol_ranks": True, "icons": True, "refresh_minutes": 30},
     "update": {"supported": True, "enabled": True, "available": None}, "window_hotkey": "Ctrl+Shift+Space",
 }
 
@@ -57,6 +58,23 @@ const answers = {
   read_log: () => "1795009950 switch: client closed in 8651 ms, session files swapped in 14 ms (no saved session)\\n1795009968 login: 'direct' did not bring it forward; foreground is chrome.exe\\n1795011035 switch: sign-in accepted\\n",
   reorder_accounts: (a) => { state.accounts.sort((x, y) => a.ids.indexOf(x.id) - a.ids.indexOf(y.id)); return null; },
   set_note: (a) => { state.accounts.find((x) => x.id === a.id).note = a.note; return null; },
+  set_net: (a) => { state.net = a.settings; return null; },
+  refresh_ranks: (a) => {
+    const ana = state.accounts.find((x) => x.id === "ana");
+    Object.assign(ana, { wins: 120, losses: 98, rank_at: Math.floor(Date.now() / 1000) - 720, rank_from: "opgg" });
+    return a.id ? { changed: 0, same: 1, not_found: 0, failed: 0, skipped: 0, paused: false } : { changed: 1, same: 1, not_found: 1, failed: 0, skipped: 0, paused: false };
+  },
+  icons: (a) => Object.fromEntries(a.numbers.map((n) => [n, "data:image/svg+xml,%%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%%3E%%3Crect width='8' height='8' fill='%%235b7fd6'/%%3E%%3Ccircle cx='4' cy='4' r='2.4' fill='%%23e3b25c'/%%3E%%3C/svg%%3E"])),
+  net_ledger: () => {
+    const now = Math.floor(Date.now() / 1000);
+    return [
+      { at: now - 5, purpose: "lol_ranks", host: "op.gg", outcome: "ok", bytes: 48211 },
+      { at: now - 9, purpose: "lol_ranks", host: "op.gg", outcome: "429", bytes: 0 },
+      { at: now - 60, purpose: "icons", host: "ddragon.leagueoflegends.com", outcome: "off", bytes: 0 },
+      { at: now - 900, purpose: "updates", host: "github.com", outcome: "ok", bytes: 0 },
+    ];
+  },
+  save_diagnostics: () => "C:\\\\Users\\\\x\\\\Downloads\\\\QuickSwitch-tani-1.json",
 };
 window.__TAURI__ = {
   core: { invoke: async (command, args) => { window.__calls.push([command, args]); return answers[command] ? answers[command](args || {}) : null; } },
@@ -96,7 +114,28 @@ async def main():
         check("the rail marks the page that is open", await page.get_attribute('#rail .nav[data-view="list"]', "aria-current") == "page")
         check("the rail counts the accounts", await text("#nav-count") == "4")
         check("with the lock on, the rail offers to lock", "kilitle" in await text("#rail-lock"))
-        check("the version is shown", "0.5.0" in await text("#rail-version"))
+        check("the version is shown", "0.6.0" in await text("#rail-version"))
+
+        # ---- the internet is asked about, once
+        check("before an answer, the question is on the page", not await page.is_hidden("#net-ask"))
+        check("and nothing has gone out", not await calls("refresh_ranks") and not await calls("icons") and not await calls("set_net"))
+        check("the rail says it is undecided", await text("#net-state") == "?")
+        check("there is nothing to refresh yet", await page.is_hidden("#ranks-refresh"))
+        await shot("ask")
+        await page.click("#net-yes")
+        await page.wait_for_timeout(1900)
+        check("a yes is kept", (await calls("set_net"))[-1]["settings"]["online"] is True and (await calls("set_net"))[-1]["settings"]["decided"] is True)
+        check("the question does not come back", await page.is_hidden("#net-ask"))
+        check("ranks are looked up right away, for everyone", (await calls("refresh_ranks"))[-1] == {"id": None})
+        check("and the result is said in a sentence", "1 hesap güncellendi" in await text("#message") and "1 Riot ID bulunamadı" in await text("#message"), await text("#message"))
+        await page.click("#message-text")
+        check("icons are asked for by number, once", await calls("icons") == [{"numbers": [4567]}], str(await calls("icons")))
+        check("an account with a picture wears it", await page.locator('#accounts .account[data-id="ana"] .portrait.pictured img').count() == 1)
+        check("one without keeps its crest alone", await page.locator('#accounts .account[data-id="smurf"] .portrait img').count() == 0)
+        check("wins, losses and the rate are on the card", "120G 98M %55" in await text('#accounts .account[data-id="ana"]'))
+        check("where the rank came from is a hover away", "OP.GG" in (await page.get_attribute('#accounts .account[data-id="ana"] .rank .line, #accounts .account[data-id="ana"] [title*="OP.GG"]', "title") or ""))
+        check("a Riot ID that is not there is flagged", "Riot ID bulunamadı" in await text('#accounts .account[data-id="eski"]'))
+        check("the rail says the internet is on", await text("#net-state") == "açık")
 
         # ---- the accounts
         rows = await text("#accounts")
@@ -203,6 +242,23 @@ async def main():
         await page.click("#message-text")
         check("and goes when clicked", await page.is_hidden("#message"))
 
+        # ---- a right click
+        menu = lambda: page.eval_on_selector_all("#menu button", "els => els.map(e => e.textContent)")
+        await page.click('#accounts .account[data-id="ana"] .go', button="right")
+        check("a right click offers what can be done with the account", await menu() == ["Oyunu aç", "Rankı yenile", "Riot ID'yi kopyala", "OP.GG'de aç", "Hesap ayarları"], str(await menu()))
+        box = await page.eval_on_selector("#menu", "e => { const b = e.getBoundingClientRect(); return b.right <= innerWidth && b.bottom <= innerHeight; }")
+        check("the menu stays inside the window", box)
+        await page.wait_for_timeout(200)
+        await shot("menu")
+        await page.click("#menu button:nth-child(4)")
+        check("the profile is opened by the app, by account", (await calls("open_profile"))[-1] == {"id": "ana"})
+        check("choosing closes the menu", await page.is_hidden("#menu"))
+        await page.click('#accounts .account[data-id="val"] .go', button="right")
+        check("an account without a Riot ID is offered less", await menu() == ["Hesaba geç", "Hesap ayarları"], str(await menu()))
+        await page.keyboard.press("Escape")
+        check("Escape closes the menu", await page.is_hidden("#menu"))
+        check("a right click switched nothing", len(await calls("switch_account")) == 0)
+
         # ---- one account: note and copying the password
         await page.click('#accounts .account[data-id="ana"] .more')
         await page.fill("#edit-note", "ana hesabım")
@@ -218,6 +274,16 @@ async def main():
         await page.wait_for_timeout(200)
         check("copying says how long it stays", "30 saniye" in await text("#edit-message"))
         check("the master password box is emptied", await page.input_value("#edit-copy-master") == "")
+        check("the lookup fields show what is known", await page.input_value("#edit-riot-id") == "Ana#TR1" and await page.input_value("#edit-region") == "tr")
+        check("and say where the rank came from", "op.gg'den alındı" in (await text("#edit-lookup-state")).lower(), await text("#edit-lookup-state"))
+        await page.fill("#edit-riot-id", "Ana Yeni#TR1")
+        await page.select_option("#edit-region", "euw")
+        await page.click("#edit-lookup-save")
+        await page.wait_for_timeout(200)
+        check("a Riot ID and region can be set by hand", (await calls("set_lookup"))[-1] == {"id": "ana", "riotId": "Ana Yeni#TR1", "region": "euw"}, str(await calls("set_lookup")))
+        await page.click("#edit-rank-refresh")
+        await page.wait_for_timeout(1900)
+        check("one account's rank can be looked up alone", (await calls("refresh_ranks"))[-1] == {"id": "ana"} and "değişiklik yok" in await text("#edit-message"), await text("#edit-message"))
         await shot("edit")
         await page.click("#edit-back")
         await page.click('#accounts .account[data-id="smurf"] .more')
@@ -287,14 +353,55 @@ async def main():
         lines = await page.eval_on_selector_all("#log-lines li", "els => els.map(e => e.className)")
         check("the log is shown line by line, trouble marked, switches set apart", lines == ["start", "bad", ""], str(lines))
         check("times are shown as a clock says them", ":" in await page.inner_text("#log-lines li time"))
+        await page.click("#log-bundle")
+        await page.wait_for_timeout(1900)
+        check("a diagnostics bundle says where it went and what is not in it", "QuickSwitch-tani" in await text("#log-message") and "şifre" in await text("#log-message"), await text("#log-message"))
         await shot("log")
+
+        # ---- the internet page
+        await page.click("#nav-net")
+        await page.wait_for_timeout(300)
+        check("the internet page opens from the rail", not await page.is_hidden("#view-net") and await page.get_attribute("#nav-net", "aria-current") == "page")
+        check("it shows the switches as they are", await page.is_checked("#net-online") and await page.is_checked("#net-ranks") and await text("#net-pill") == "Açık")
+        ledger = await page.eval_on_selector_all("#net-ledger tbody tr", "els => els.map(e => [...e.cells].slice(1).map(c => c.textContent).join('|') + '|' + e.className)")
+        check("every connection is listed: what for, where to, how it went", ledger == [
+            "League rankı|op.gg|tamam|47 KB|",
+            "League rankı|op.gg|sunucu 429 dedi||bad",
+            "Profil simgesi|ddragon.leagueoflegends.com|kapalı olduğu için kurulmadı||quiet",
+            "Güncelleme|github.com|tamam||",
+        ], str(ledger))
+        check("the page says where things go", "op.gg" in await text("#view-net .flows") and "ddragon.leagueoflegends.com" in await text("#view-net .flows"))
+        check("nothing overflows sideways here either", await page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        await shot("net")
+        await page.uncheck("#net-online")
+        await page.wait_for_timeout(250)
+        check("the master switch turns everything off", (await calls("set_net"))[-1]["settings"]["online"] is False and "hiçbir bağlantı kurmaz" in await text("#net-message"))
+        check("the parts under it go quiet", await page.is_disabled("#net-ranks") and await page.is_disabled("#net-every") and await text("#net-pill") == "Kapalı")
+        check("and the rail says so", await text("#net-state") == "kapalı")
+        await page.click('#rail .nav[data-view="list"]')
+        check("with the internet off there is nothing to refresh", await page.is_hidden("#ranks-refresh"))
+        await page.click("#nav-net")
+        await page.check("#net-online")
+        await page.select_option("#net-every", "60")
+        await page.wait_for_timeout(250)
+        check("how often is kept", (await calls("set_net"))[-1]["settings"] == {"decided": True, "online": True, "lol_ranks": True, "icons": True, "refresh_minutes": 60}, str((await calls("set_net"))[-1]))
+        await page.uncheck("#net-ranks")
+        await page.uncheck("#net-icons")
+        await page.wait_for_timeout(250)
+        check("with only the update check left, it says so", await text("#net-pill") == "Yalnız güncelleme" and await text("#net-state") == "yalnız güncelleme", await text("#net-pill"))
+        await page.check("#net-ranks")
+        await page.check("#net-icons")
+        await page.wait_for_timeout(250)
+        await page.click("#net-clear")
+        check("the list can be cleared", len(await calls("clear_net_ledger")) == 1)
         await page.click("#settings")
         await page.wait_for_timeout(250)
-        check("settings open from the rail", not await page.is_hidden("#view-settings") and "0.5.0" in await text("#view-settings"))
+        check("settings open from the rail", not await page.is_hidden("#view-settings") and "0.6.0" in await text("#view-settings"))
         await shot("settings")
         await page.click("#set-security")
         await page.wait_for_timeout(250)
         check("security opens from the rail", "Uygulama kilidi" in await text("#view-security"))
+        check("security names what the internet is used for", "güncelleme denetimi, League rankı, profil simgeleri" in await text("#sec-net"), await text("#sec-net"))
         await shot("security")
         await page.click('#rail .nav[data-view="list"]')
         check("and the rail leads back to the accounts", not await page.is_hidden("#view-list"))

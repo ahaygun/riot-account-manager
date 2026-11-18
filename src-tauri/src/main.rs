@@ -1,7 +1,7 @@
 // No console window in release builds on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use quickswitch_core::{Env, Error, Game, LocalApi, LoginOutcome, Switcher, SysProcs, View, WindowTyper};
+use quickswitch_core::{Env, Error, Game, Gate, HttpTransport, LocalApi, LoginOutcome, NetSettings, Purpose, Refreshed, Switcher, SysProcs, View, WindowTyper};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -374,6 +374,105 @@ fn import_league_accounts(app: AppHandle, json: String) -> CmdResult<quickswitch
     edit(&app, |sw| sw.import_league_accounts(&json))
 }
 
+// ---- the internet ---------------------------------------------------------------
+//
+// The window itself cannot reach the network (see the content security
+// policy in tauri.conf.json). Everything it shows from outside was fetched
+// here, through the core's gate, and is handed over as data.
+
+/// Stores the user's choices about going online; calling it is the answer
+/// to the question the app asks once.
+#[tauri::command(async)]
+fn set_net(app: AppHandle, settings: NetSettings) -> CmdResult<()> {
+    edit(&app, |sw| sw.set_net_settings(settings))
+}
+
+/// Looks up the public League profile of one account (`id`) or of all.
+/// Runs outside the lock a switch holds: it reads the internet, not Riot Client.
+#[tauri::command(async)]
+fn refresh_ranks(app: AppHandle, id: Option<String>) -> CmdResult<Refreshed> {
+    touch(&app);
+    let done = app.state::<Shared>().sw.refresh_ranks(id.as_deref(), id.is_none())?;
+    changed(&app);
+    Ok(done)
+}
+
+#[tauri::command(async)]
+fn set_lookup(app: AppHandle, id: String, riot_id: String, region: String) -> CmdResult<()> {
+    edit(&app, |sw| sw.set_lookup(&id, &riot_id, &region))
+}
+
+/// Profile icon pictures as `data:` addresses the window can show, keyed
+/// by icon number. Ones that are not here and may not be fetched are left out.
+#[tauri::command(async)]
+fn icons(app: AppHandle, numbers: Vec<u32>) -> std::collections::HashMap<u32, String> {
+    let shared = app.state::<Shared>();
+    numbers
+        .into_iter()
+        .take(64)
+        .filter_map(|n| shared.sw.icon_png(n).map(|png| (n, format!("data:image/png;base64,{}", base64(&png)))))
+        .collect()
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = u32::from(chunk[0]) << 16 | u32::from(*chunk.get(1).unwrap_or(&0)) << 8 | u32::from(*chunk.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// Everything that went out, or was stopped from going out: newest first.
+#[tauri::command(async)]
+fn net_ledger(app: AppHandle) -> Vec<quickswitch_core::net::Entry> {
+    let mut ledger = app.state::<Shared>().sw.net.ledger();
+    ledger.reverse();
+    ledger
+}
+
+#[tauri::command(async)]
+fn clear_net_ledger(app: AppHandle) {
+    app.state::<Shared>().sw.net.clear_ledger();
+}
+
+/// Opens an account's public profile page in the user's own browser. The
+/// address is built here from the stored Riot ID; the window cannot open
+/// addresses of its choosing.
+#[tauri::command(async)]
+fn open_profile(app: AppHandle, id: String) -> CmdResult<()> {
+    let shared = app.state::<Shared>();
+    let account = shared.sw.accounts()?.into_iter().find(|a| a.id == id).ok_or_else(|| other("Hesap bulunamadı."))?;
+    let region = account.region.clone().or_else(|| account.riot_id.as_deref().and_then(quickswitch_core::opgg::region_from_tag).map(str::to_string));
+    let url = region
+        .zip(account.riot_id.as_deref())
+        .and_then(|(region, riot_id)| quickswitch_core::opgg::profile_url(&region, riot_id))
+        .ok_or_else(|| other("Bu hesabın Riot ID'si ya da bölgesi bilinmiyor."))?;
+    if cfg!(windows) {
+        std::process::Command::new("explorer.exe").arg(&url).spawn().map(|_| ()).map_err(|e| other(e.to_string()))
+    } else {
+        Err(other(url))
+    }
+}
+
+/// Writes the diagnostic bundle to Downloads and shows it. See
+/// `diagnose.rs` for what is and is not in it.
+#[tauri::command(async)]
+fn save_diagnostics(app: AppHandle) -> CmdResult<String> {
+    touch(&app);
+    let version = app.package_info().version.to_string();
+    let bundle = app.state::<Shared>().sw.diagnostics(&version);
+    let text = serde_json::to_string_pretty(&bundle).map_err(|e| other(e.to_string()))?;
+    save_export(&app, "QuickSwitch-tani", "json", &text)
+}
+
 /// The last part of the diagnostic log, for the window to show.
 #[tauri::command(async)]
 fn read_log(app: AppHandle) -> String {
@@ -576,8 +675,24 @@ async fn find_update(app: &AppHandle) -> Result<Option<String>, String> {
     if !app.state::<Shared>().can_update {
         return Ok(None);
     }
+    let shared = app.state::<Shared>();
+    // The update check is the one connection the gate does not make itself;
+    // it obeys the same master switch and leaves its line in the same ledger.
+    if !shared.sw.net_settings().allows(Purpose::Updates) {
+        shared.sw.net.note(Purpose::Updates, "github.com", "off", 0);
+        return Ok(None);
+    }
     let updater = app.updater().map_err(|e| e.to_string())?;
-    let found = updater.check().await.map_err(|e| e.to_string())?;
+    let found = match updater.check().await {
+        Ok(found) => {
+            shared.sw.net.note(Purpose::Updates, "github.com", "ok", 0);
+            found
+        }
+        Err(e) => {
+            shared.sw.net.note(Purpose::Updates, "github.com", "unreachable", 0);
+            return Err(e.to_string());
+        }
+    };
     let version = found.as_ref().map(|u| u.version.clone());
     *lock(&app.state::<Shared>().update) = found;
     changed(app);
@@ -586,6 +701,9 @@ async fn find_update(app: &AppHandle) -> Result<Option<String>, String> {
 
 #[tauri::command]
 async fn check_update_now(app: AppHandle) -> CmdResult<Option<String>> {
+    if !app.state::<Shared>().sw.net_settings().allows(Purpose::Updates) {
+        return Err(other("İnternet kapalı olduğu için güncelleme denetlenmedi. İnternet bölümünden açabilirsin."));
+    }
     find_update(&app).await.map_err(|e| other(format!("Güncelleme denetlenemedi: {e}")))
 }
 
@@ -624,7 +742,7 @@ async fn install_update(app: AppHandle) -> CmdResult<()> {
     let mut last_percent = None;
     let progress_app = app.clone();
     let done_app = app.clone();
-    update
+    let done = update
         .download_and_install(
             move |chunk, total| {
                 received += chunk as u64;
@@ -638,8 +756,10 @@ async fn install_update(app: AppHandle) -> CmdResult<()> {
                 let _ = done_app.emit("update-progress", UpdateProgress { percent: Some(100), installing: true });
             },
         )
-        .await
-        .map_err(|e| other(format!("Güncelleme kurulamadı: {e}")))?;
+        .await;
+    // The download is a connection like any other: it gets its line too.
+    app.state::<Shared>().sw.net.note(Purpose::Updates, "github.com", if done.is_ok() { "ok" } else { "unreachable" }, 0);
+    done.map_err(|e| other(format!("Güncelleme kurulamadı: {e}")))?;
     app.restart();
 }
 
@@ -851,6 +971,10 @@ fn main() {
     let mut switcher = Switcher::new(env, Arc::new(SysProcs::default()), api, Arc::new(WindowTyper));
     switcher.ask_for_focus = Arc::new(ask_for_focus);
     switcher.on_step = Arc::new(on_step);
+    // The gate gets its way out. Without this line the app has no internet.
+    if let Ok(transport) = HttpTransport::new(env!("CARGO_PKG_VERSION")) {
+        switcher.net = Gate::new(Box::new(transport), switcher.env.data_dir.join("network.log"));
+    }
 
     // The updater is only configured in release builds made with a signing
     // key (see .github/workflows/release.yml). Without that configuration
@@ -903,6 +1027,14 @@ fn main() {
             add_with_password,
             import_league_accounts,
             read_log,
+            set_net,
+            refresh_ranks,
+            set_lookup,
+            icons,
+            net_ledger,
+            clear_net_ledger,
+            open_profile,
+            save_diagnostics,
             set_note,
             bulk_add,
             import_backup,
@@ -964,6 +1096,23 @@ fn main() {
 
             let loop_handle = handle.clone();
             std::thread::spawn(move || background_loop(loop_handle));
+
+            // Ranks are looked up on a thread of their own: slow answers
+            // from the internet must never hold up a switch. A few accounts
+            // a minute, each no more often than the user's setting allows;
+            // the core does nothing here unless the user has said yes.
+            let rank_handle = handle.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(20));
+                loop {
+                    if let Ok(done) = rank_handle.state::<Shared>().sw.refresh_ranks(None, false) {
+                        if done.changed + done.not_found > 0 {
+                            changed(&rank_handle);
+                        }
+                    }
+                    std::thread::sleep(Duration::from_secs(60));
+                }
+            });
 
             match start_target.clone() {
                 Some(target) => switch_in_background(&handle, target),

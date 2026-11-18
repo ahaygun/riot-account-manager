@@ -27,7 +27,7 @@ try { gameFilter = localStorage.getItem("gameFilter") || "all"; } catch {}
 const errorText = (e) => (e && e.message) || String(e);
 const errorKind = (e) => (e && e.kind) || "other";
 
-const VIEWS = ["list", "edit", "wizard", "unlock", "security", "settings", "data", "log"];
+const VIEWS = ["list", "edit", "wizard", "unlock", "security", "settings", "data", "net", "log"];
 // The rail marks the page that is open; an account's settings, the wizard
 // and the unlock prompt all belong to the accounts.
 const RAIL_HOME = { edit: "list", wizard: "list", unlock: "list" };
@@ -188,6 +188,42 @@ function visibleAccounts() {
   return sortBy in SORTS ? shown.sort(SORTS[sortBy]) : shown;
 }
 
+// How long ago a Unix time (seconds) was, in words.
+function ago(seconds) {
+  const minutes = Math.max(0, Math.round((Date.now() / 1000 - seconds) / 60));
+  if (minutes < 2) return "az önce";
+  if (minutes < 60) return `${minutes} dk önce`;
+  if (minutes < 48 * 60) return `${Math.round(minutes / 60)} sa önce`;
+  return `${Math.round(minutes / 1440)} gün önce`;
+}
+
+// Where an account's rank came from and how old it is, for a tooltip.
+function rankSource(a) {
+  if (!a.rank_at) return "";
+  const from = a.rank_from === "client" ? "League istemcisinden okundu" : a.rank_from === "opgg" ? "OP.GG'den alındı" : "";
+  return from ? `${from}, ${ago(a.rank_at)}` : "";
+}
+
+// ---- profile icons ---------------------------------------------------------------
+// Pictures arrive from the app as data, keyed by icon number, and are kept
+// for as long as the window lives. A number is asked for once.
+
+const iconPictures = new Map(); // number -> data: address, or null when there is none to show
+let iconsAsked = false;
+
+async function fetchIcons() {
+  const wanted = [...new Set(view.accounts.map((a) => a.icon).filter((n) => n != null && !iconPictures.has(n)))];
+  if (!wanted.length || iconsAsked) return;
+  iconsAsked = true;
+  try {
+    const got = await invoke("icons", { numbers: wanted });
+    for (const n of wanted) iconPictures.set(n, got[n] || null);
+    if (Object.keys(got).length) render();
+  } catch {} finally {
+    iconsAsked = false;
+  }
+}
+
 // A League ban that is still running, as words; "" when there is none.
 function banText(ban) {
   if (!ban) return "";
@@ -273,6 +309,14 @@ function render() {
   $("queue").hidden = !queued;
   if (queued) $("queue-text").textContent = `Oyun kapanınca "${queued.name}" hesabına geçilecek.`;
   $("settings-dot").hidden = !update.available;
+
+  // The internet: asked about once, then shown as what it is.
+  const net = view.net || {};
+  $("net-ask").hidden = !!net.decided || !view.accounts.length || isLocked;
+  const ranksOn = !!(net.decided && net.online && net.lol_ranks);
+  $("ranks-refresh").hidden = !ranksOn || !view.accounts.length;
+  $("net-state").textContent = netWord(net).toLocaleLowerCase("tr");
+  if (net.decided && net.online && net.icons) fetchIcons();
 
   // The rail's foot: the lock, as a button that does the obvious thing.
   $("rail-lock").hidden = !view.security.lock_enabled;
@@ -445,6 +489,11 @@ function row(a, i) {
       : `Riot bu hesap için League banı bildirdi; ${new Date(a.ban.until).toLocaleString("tr")} tarihinde bitiyor. O zamana kadar oyun açılırsa bağlantı kesilir.`;
     name.append(t);
   }
+  if (a.lookup_problem === "not_found") {
+    const t = tag("Riot ID bulunamadı", true);
+    t.title = "OP.GG'de bu Riot ID bu bölgede yok. Hesap ayarlarından Riot ID'yi ve bölgeyi denetle.";
+    name.append(t);
+  }
   if (a.needs_login) name.append(tag("giriş gerekli", true));
   // A ban says more than an unused session does; one warning of the two is enough.
   else if (a.stale && !ban) {
@@ -481,6 +530,7 @@ function row(a, i) {
     lp.textContent = `${rank.lp} LP`;
     line.append(lp);
   }
+  line.title = rankSource(a);
   const bar = document.createElement("span");
   bar.className = "lp";
   const fill = document.createElement("i");
@@ -497,12 +547,29 @@ function row(a, i) {
     s.className = cls;
     detail.append(s);
   };
+  if (a.wins != null && a.losses != null && a.wins + a.losses > 0) {
+    part(`${a.wins}G ${a.losses}M %${Math.round((a.wins * 100) / (a.wins + a.losses))}`, "record");
+  }
   if (a.level) part(`Seviye ${a.level}`);
   if (a.game === "client") part(GAME_NAMES.client);
   if (a.hotkey) part(hotkeyLabel(a.hotkey), "key");
   if (a.note) part(a.note, "note");
 
-  go.append(crest(rank), who, standing, detail);
+  // The face of the account: its profile icon when we have the picture,
+  // with the crest set into its corner; the crest alone otherwise.
+  const portrait = document.createElement("span");
+  portrait.className = "portrait";
+  const picture = a.icon != null && iconPictures.get(a.icon);
+  if (picture) {
+    const img = document.createElement("img");
+    img.src = picture;
+    img.alt = "";
+    img.draggable = false;
+    portrait.classList.add("pictured");
+    portrait.append(img);
+  }
+  portrait.append(crest(rank));
+  go.append(portrait, who, standing, detail);
 
   const acts = document.createElement("span");
   acts.className = "acts";
@@ -536,6 +603,7 @@ function row(a, i) {
   acts.append(more);
 
   li.append(go, acts);
+  li.addEventListener("contextmenu", (e) => openMenu(e, a));
   return li;
 }
 
@@ -954,6 +1022,8 @@ function openEdit(id) {
   $("edit-remove").textContent = "Hesabı sil";
   $("edit-name").value = editAccount().name;
   $("edit-note").value = editAccount().note || "";
+  $("edit-riot-id").value = editAccount().riot_id || "";
+  $("edit-region").value = editAccount().region || "";
   $("edit-copy-master").value = "";
   fillEdit();
   show("edit");
@@ -977,6 +1047,16 @@ function fillEdit() {
     : "Şifre kaydedersen, oturumun süresi dolduğunda giriş otomatik yapılır. Şifre bu bilgisayarda şifreli saklanır.";
   $("edit-cred-clear").hidden = !a.has_password;
   $("edit-copy").hidden = !a.has_password;
+  const net = view.net || {};
+  const ranksOn = !!(net.decided && net.online && net.lol_ranks);
+  $("edit-lookup-state").textContent = a.game === "valorant"
+    ? "Bu hesap yalnızca VALORANT oynuyor; League rankı aranmaz."
+    : !ranksOn ? "Güncel rank kapalı. İnternet bölümünden açabilirsin."
+    : a.lookup_problem === "not_found" ? "OP.GG'de bu Riot ID bu bölgede bulunamadı. İkisini de denetle."
+    : a.rank_at && rankSource(a) ? `Rank: ${rankSource(a)}.`
+    : "Riot ID ve bölge biliniyorsa rank kendiliğinden alınır. Hesaba bir kez giriş yapınca ikisi de öğrenilir; istersen elle de yazabilirsin.";
+  $("edit-rank-refresh").disabled = !ranksOn || a.game === "valorant";
+  $("edit-profile").disabled = !a.riot_id;
   $("edit-copy-master").hidden = !view.security.lock_enabled;
 }
 
@@ -1004,6 +1084,23 @@ $("edit-name").addEventListener("change", (e) => {
   const name = e.target.value.trim();
   if (name && name !== editAccount().name) editCall("rename_account", { name });
 });
+
+$("edit-lookup-save").addEventListener("click", () =>
+  editCall("set_lookup", { riotId: $("edit-riot-id").value, region: $("edit-region").value }, "Kaydedildi."));
+
+$("edit-rank-refresh").addEventListener("click", (e) => whileWorking(e.currentTarget, async () => {
+  try {
+    const done = await invoke("refresh_ranks", { id: editing });
+    $("edit-message").className = "hint";
+    $("edit-message").textContent = refreshText(done);
+  } catch (err) {
+    $("edit-message").className = "hint error";
+    $("edit-message").textContent = errorText(err);
+  }
+  await refresh();
+}));
+
+$("edit-profile").addEventListener("click", () => editCall("open_profile", {}, ""));
 
 $("edit-note").addEventListener("change", (e) => {
   if (e.target.value.trim() !== (editAccount().note || "")) editCall("set_note", { note: e.target.value }, "Not kaydedildi.");
@@ -1258,11 +1355,15 @@ function fillSecurity() {
   const sec = view.security;
   // What is said about the network depends on what this build can do.
   const update = view.update || {};
-  $("sec-net").textContent = !update.supported
-    ? "Uygulama internete bağlanmaz. Yalnızca bu bilgisayardaki Riot Client ile konuşur."
-    : update.enabled
-      ? "Uygulamanın tek internet bağlantısı güncelleme denetimidir; Ayarlar'dan kapatabilirsin. Bunun dışında yalnızca bu bilgisayardaki Riot Client ile konuşur."
-      : "Güncelleme denetimi kapalı: uygulama internete bağlanmaz. Yalnızca bu bilgisayardaki Riot Client ile konuşur.";
+  const net = view.net || {};
+  const master = !net.decided || net.online;
+  const uses = [];
+  if (update.supported && update.enabled && master) uses.push("güncelleme denetimi");
+  if (net.decided && net.online && net.lol_ranks) uses.push("League rankı");
+  if (net.decided && net.online && net.icons) uses.push("profil simgeleri");
+  $("sec-net").textContent = uses.length
+    ? `Uygulama internete yalnızca şunlar için bağlanır: ${uses.join(", ")}. Şifreler, kullanıcı adları ve oturumlar hiçbir bağlantıda gönderilmez; kurulan her bağlantı İnternet bölümündeki kayıtta görünür. Bunun dışında yalnızca bu bilgisayardaki Riot Client ile konuşur.`
+    : "Uygulama şu an internete bağlanmıyor. Yalnızca bu bilgisayardaki Riot Client ile konuşur.";
 
   $("sec-counts").textContent =
     `${view.accounts.length} hesap, ${sec.saved_sessions} kayıtlı oturum, ${sec.saved_passwords} kayıtlı şifre.`;
@@ -1508,6 +1609,192 @@ $("data-plain").addEventListener("click", async (e) => {
   $("data-master").value = "";
 });
 
+// ---- the internet --------------------------------------------------------------
+
+// What a round of looking up ranks came to, in a sentence.
+function refreshText(done) {
+  if (done.paused && !(done.changed + done.same + done.not_found + done.failed)) {
+    return "Şu an bakılamıyor: ya internet kapalı ya da OP.GG bir süre beklememizi istedi.";
+  }
+  const parts = [];
+  if (done.changed) parts.push(`${done.changed} hesap güncellendi`);
+  if (done.same) parts.push(`${done.same} hesapta değişiklik yok`);
+  if (done.not_found) parts.push(`${done.not_found} Riot ID bulunamadı`);
+  if (done.failed) parts.push(`${done.failed} hesaba bakılamadı`);
+  if (done.skipped) parts.push(`${done.skipped} hesabın Riot ID'si ya da bölgesi bilinmiyor`);
+  if (done.paused) parts.push("OP.GG beklememizi istedi, kalanı sonra");
+  return parts.length ? `${parts.join(", ")}.` : "Bakılacak hesap yok.";
+}
+
+$("ranks-refresh").addEventListener("click", (e) => whileWorking(e.currentTarget, async () => {
+  try {
+    say(refreshText(await invoke("refresh_ranks", { id: null })));
+  } catch (err) {
+    say(errorText(err), true);
+  }
+  await refresh();
+}));
+
+// The state of the internet in a word or two.
+function netWord(net) {
+  if (!net.decided) return "?";
+  if (!net.online) return "Kapalı";
+  return net.lol_ranks || net.icons ? "Açık" : "Yalnız güncelleme";
+}
+
+// The question asked once: any answer is kept. A no leaves the update
+// check as it has always been; only the İnternet page turns that off too.
+async function answerNet(yes) {
+  try {
+    await invoke("set_net", { settings: { decided: true, online: true, lol_ranks: yes, icons: yes, refresh_minutes: 30 } });
+  } catch (err) {
+    say(errorText(err), true);
+  }
+  await refresh();
+  if (yes) $("ranks-refresh").click();
+}
+$("net-yes").addEventListener("click", () => answerNet(true));
+$("net-no").addEventListener("click", () => answerNet(false));
+$("net-more").addEventListener("click", () => openNet());
+
+const PURPOSES = { updates: "Güncelleme", lol_ranks: "League rankı", icons: "Profil simgesi" };
+const OUTCOMES = { ok: "tamam", off: "kapalı olduğu için kurulmadı", refused: "izinli adres değil, reddedildi", too_large: "cevap çok büyük, atıldı", unreachable: "ulaşılamadı" };
+
+function fillNet() {
+  const net = view.net || {};
+  // Before an answer only the update check runs, so that is what is shown.
+  $("net-online").checked = !net.decided || !!net.online;
+  $("net-ranks").checked = !!(net.decided && net.lol_ranks);
+  $("net-icons").checked = !!(net.decided && net.icons);
+  $("net-ranks").disabled = $("net-icons").disabled = $("net-every").disabled = !$("net-online").checked;
+  const every = String(net.refresh_minutes || 30);
+  if (![...$("net-every").options].some((o) => o.value === every)) $("net-every").add(new Option(`${every} dakikada bir`, every));
+  $("net-every").value = every;
+  const pill = $("net-pill");
+  pill.className = net.decided && net.online ? "pill good" : "pill";
+  pill.textContent = net.decided ? netWord(net) : "Henüz sorulmadı";
+}
+
+async function fillLedger() {
+  let entries = [];
+  try {
+    entries = await invoke("net_ledger");
+  } catch {}
+  $("net-empty").hidden = entries.length > 0;
+  $("net-ledger").hidden = !entries.length;
+  $("net-ledger").tBodies[0].replaceChildren(...entries.slice(0, 120).map((entry) => {
+    const tr = document.createElement("tr");
+    const good = entry.outcome === "ok";
+    if (!good) tr.className = entry.outcome === "off" ? "quiet" : "bad";
+    const when = new Date(entry.at * 1000).toLocaleString("tr", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const outcome = OUTCOMES[entry.outcome] || (/^\d+$/.test(entry.outcome) ? `sunucu ${entry.outcome} dedi` : entry.outcome);
+    // The updater does not say how much it read; nothing is better than "0 B".
+    const size = good && entry.bytes ? (entry.bytes >= 1024 ? `${Math.round(entry.bytes / 1024)} KB` : `${entry.bytes} B`) : "";
+    for (const text of [when, PURPOSES[entry.purpose] || entry.purpose, entry.host, outcome, size]) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.append(td);
+    }
+    return tr;
+  }));
+}
+
+function openNet() {
+  $("net-message").textContent = "";
+  fillNet();
+  fillLedger();
+  show("net");
+}
+$("nav-net").addEventListener("click", openNet);
+
+async function saveNet() {
+  const settings = {
+    decided: true,
+    online: $("net-online").checked,
+    lol_ranks: $("net-ranks").checked,
+    icons: $("net-icons").checked,
+    refresh_minutes: Number($("net-every").value) || 30,
+  };
+  try {
+    await invoke("set_net", { settings });
+    $("net-message").className = "hint";
+    $("net-message").textContent = settings.online ? "Kaydedildi." : "İnternet kapatıldı; uygulama artık hiçbir bağlantı kurmaz.";
+  } catch (err) {
+    $("net-message").className = "hint error";
+    $("net-message").textContent = errorText(err);
+  }
+  await refresh();
+  fillNet();
+}
+for (const id of ["net-online", "net-ranks", "net-icons", "net-every"]) $(id).addEventListener("change", saveNet);
+$("net-reload").addEventListener("click", fillLedger);
+$("net-clear").addEventListener("click", async () => {
+  await invoke("clear_net_ledger").catch(() => {});
+  fillLedger();
+});
+
+// ---- what can be done with one account, on a right click -----------------------
+
+function closeMenu() {
+  $("menu").hidden = true;
+}
+
+function openMenu(e, a) {
+  e.preventDefault();
+  if (busy) return;
+  const net = view.net || {};
+  const items = [];
+  if (a.game === "both") {
+    items.push(["League ile aç", () => switchTo(a, "lol")], ["VALORANT ile aç", () => switchTo(a, "valorant")]);
+  } else {
+    items.push([a.id === view.active ? "Oyunu aç" : "Hesaba geç", () => switchTo(a, rowGame(a))]);
+  }
+  if (net.decided && net.online && net.lol_ranks && a.game !== "valorant" && a.riot_id) {
+    items.push(["Rankı yenile", async () => {
+      try {
+        say(refreshText(await invoke("refresh_ranks", { id: a.id })));
+      } catch (err) {
+        say(errorText(err), true);
+      }
+      refresh();
+    }]);
+  }
+  if (a.riot_id) {
+    items.push(["Riot ID'yi kopyala", async () => {
+      try {
+        await navigator.clipboard.writeText(a.riot_id);
+        say("Riot ID kopyalandı.");
+      } catch {
+        say("Panoya yazılamadı.", true);
+      }
+    }]);
+    items.push(["OP.GG'de aç", () => invoke("open_profile", { id: a.id }).catch((err) => say(errorText(err), true))]);
+  }
+  items.push(["Hesap ayarları", () => openEdit(a.id)]);
+
+  const menu = $("menu");
+  menu.replaceChildren(...items.map(([label, run]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("role", "menuitem");
+    b.textContent = label;
+    b.addEventListener("click", () => { closeMenu(); run(); });
+    return b;
+  }));
+  menu.hidden = false;
+  // Kept inside the window whichever corner the click was in.
+  const { width, height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(e.clientX, window.innerWidth - width - 8)}px`;
+  menu.style.top = `${Math.min(e.clientY, window.innerHeight - height - 8)}px`;
+  menu.firstElementChild.focus();
+}
+
+window.addEventListener("click", (e) => { if (!e.target.closest("#menu")) closeMenu(); });
+window.addEventListener("blur", closeMenu);
+window.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
+// Nowhere else has a use for the browser's own menu.
+window.addEventListener("contextmenu", (e) => { if (!e.target.closest("input, textarea, .log")) e.preventDefault(); });
+
 // ---- the diagnostic log --------------------------------------------------------
 // Each line of the file is a time in Unix seconds and a sentence. Shown
 // with the time as a clock would say it, a rule above each new switch, and
@@ -1565,6 +1852,17 @@ async function openLog() {
 
 $("nav-log").addEventListener("click", openLog);
 $("log-refresh").addEventListener("click", (e) => whileWorking(e.currentTarget, openLog));
+$("log-bundle").addEventListener("click", (e) => whileWorking(e.currentTarget, async () => {
+  try {
+    const path = await invoke("save_diagnostics");
+    $("log-message").className = "hint";
+    $("log-message").textContent = `Tanı paketi yazıldı: ${path}. İçinde hesap adı, kullanıcı adı, şifre ya da oturum yok; olduğu gibi gönderebilirsin.`;
+  } catch (err) {
+    $("log-message").className = "hint error";
+    $("log-message").textContent = errorText(err);
+  }
+}));
+
 $("log-copy").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(logText);

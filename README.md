@@ -1,6 +1,6 @@
 # QuickSwitch
 
-Riot Client hesapları arasında şifre yazmadan geçiş. Her hesabın "Oturumu açık tut" oturumunu saklar, seçtiğin hesabınkini yerine koyar ve oyunu başlatır.
+Riot Client hesapları arasında şifre yazmadan geçiş. Her hesabın "Oturumu açık tut" oturumunu saklar, seçtiğin hesabınkini yerine koyar ve oyunu başlatır. İstersen hesaplarının güncel League rankını da gösterir.
 
 ## İndir ve kur
 
@@ -51,7 +51,9 @@ Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 
 ## Listede görünenler
 
-- Riot ID, tek/çift sıralama ligi ve seviye: League istemcisi o hesapla açıkken okunur ve hatırlanır.
+- Riot ID, tek/çift sıralama ligi ve seviye: League istemcisi o hesapla açıkken okunur ve hatırlanır. Güncel rank açıksa (aşağıda) hesaba girmeden de güncellenir; galibiyet, mağlubiyet ve kazanma oranı da görünür. Rankın üstüne gelince nereden ve ne zaman alındığı yazar.
+- **Profil simgesi:** hesabın League'deki simgesi, rank arması köşesinde olacak şekilde gösterilir.
+- **Riot ID bulunamadı:** OP.GG'de bu Riot ID bu bölgede yok. Hesap ayarlarından Riot ID'yi ve bölgeyi düzelt.
 - **N gündür açılmadı:** hesabın oturumu en az 7 gündür kullanılmadı. Riot kullanılmayan oturumları bir süre sonra sonlandırır; süreyi açıklamaz. Hesaba geçince oturum hâlâ geçerliyse uyarı kalkar. Eşik `config.json` içindeki `stale_after_days` ile değişir, 0 uyarıyı kapatır.
 - **ban: N gün / kalıcı ban:** Riot son girişte bu hesap için League banı bildirdi. Giriş yine yapılır; ban bitene kadar oyun açılırsa bağlantı kesilir. Hesaba banı kalkmış halde girince etiket kalkar.
 - **Not:** hesap ayarlarında yazdığın kısa not satırın altında görünür; arama notlarda da arar.
@@ -59,13 +61,26 @@ Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 - **Soldaki sayılar:** giriş gerektiren, banlı ve uzun süredir açılmayan hesapları sayar; bir sayıya tıklamak listeyi ona indirir.
 - **giriş gerekli:** kayıtlı oturum son denemede kabul edilmedi. Şifre kayıtlıysa otomatik girilir; değilse Riot Client'ta "Oturumu açık tut" ile bir kez elle gir, kayıt kendiliğinden yenilenir.
 
+## Güncel rank ve internet
+
+Uygulama ilk açılışta bir kez sorar: hesaplarının güncel rankını göstereyim mi? **Aç** dersen her League hesabının herkese açık [OP.GG](https://op.gg) sayfasına Riot ID'si ve bölgesiyle bakar, profil simgelerini Riot'un resim sunucusundan alır. **Kapalı kalsın** dersen hiçbir şey değişmez; uygulama eskisi gibi yalnızca güncelleme denetimi yapar.
+
+- Rank kendiliğinden yenilenir (varsayılan: hesap başına 30 dakikada bir). Üstteki yenile düğmesi hepsine şimdi bakar; bir hesaba sağ tıklayıp **Rankı yenile** yalnızca ona bakar.
+- Riot ID ve bölge, hesaba bir kez League ile girilince öğrenilir. İstersen hesap ayarlarından elle de yazabilirsin; böylece hiç girmediğin hesabın rankı da görünür.
+- League istemcisi o hesapla açıkken okunan rank, OP.GG'den gelen daha eski bilginin önündedir.
+- VALORANT rankı henüz gösterilmez.
+- Soldaki **İnternet** bölümü her işin anahtarını, neyin nereye gittiğini ve **bağlantı kaydını** gösterir: uygulamanın kurduğu ve kurmayı reddettiği her bağlantı satır satır oradadır. Ana anahtarı kapatırsan uygulama hiçbir bağlantı kurmaz.
+- Şifreler, kullanıcı adları ve oturumlar hiçbir bağlantıda gönderilmez. Ayrıntı: [SECURITY.md](SECURITY.md).
+
+Bir hesaba **sağ tıklayınca** kısa bir menü açılır: hesaba geç, rankı yenile, Riot ID'yi kopyala, OP.GG'de aç, hesap ayarları.
+
 ## Pencere
 
-Solda bölümler durur: **Hesaplar**, **Taşı ve yedekle**, **Güvenlik**, **Tanı kaydı**, **Ayarlar**. Altında kilit açıksa kilitleme düğmesi ve sürüm.
+Solda bölümler durur: **Hesaplar**, **Taşı ve yedekle**, **Güvenlik**, **İnternet**, **Tanı kaydı**, **Ayarlar**. Altında kilit açıksa kilitleme düğmesi ve sürüm.
 
 Bir hesaba geçerken pencerenin altında **geçiş hattı** belirir: Riot Client'ın kapanması, oturumun yerine konması, istemcinin açılması, girişin kabulü, gerekiyorsa şifreyle giriş ve oyunun açılması birer durak olarak görünür. Geçilen duraklar yeşil, o anki durak sarıdır; bir şey durursa hangi durakta durduğu kırmızı kalır. Giriş takibi **İptal** ile bırakılabilir.
 
-**Tanı kaydı** bölümü `quickswitch.log` dosyasının son satırlarını saatleriyle gösterir, sorun bildiren satırları işaretler ve tek tıkla panoya kopyalar. Bir şey çalışmadığında paylaşılacak şey budur.
+**Tanı kaydı** bölümü `quickswitch.log` dosyasının son satırlarını saatleriyle gösterir, sorun bildiren satırları işaretler ve tek tıkla panoya kopyalar. Bir şey çalışmadığında paylaşılacak şey budur. **Tanı paketi kaydet** daha ayrıntılı bir dosya yazar: Riot Client'ın o anki cevaplarının biçimi, oturum dosyalarının boyutu, ayarlar. İçinde hesap adı, kullanıcı adı, şifre ya da oturum yoktur; uygulama dosyayı hiçbir yere göndermez.
 
 **Ayarlar:** sürüm ve güncellemeler, Windows açılınca tepside başlatma, pencereyi açan kısayol.
 
@@ -99,7 +114,8 @@ Doğrulama kodu (2FA) ya da captcha çıkarsa onu senin tamamlaman gerekir.
 
 ## Güvenlik
 
-- Veriler `%LOCALAPPDATA%\QuickSwitch\` içinde, Windows hesabına bağlı şifreli durur. Uygulamanın tek internet bağlantısı, açıksa güncelleme denetimidir.
+- Veriler `%LOCALAPPDATA%\QuickSwitch\` içinde, Windows hesabına bağlı şifreli durur.
+- İnternete yalnızca üç iş için çıkılır: güncelleme denetimi ve, sen açarsan, League rankı ile profil simgeleri. Her bağlantı yalnızca izinli sunuculara kurulur ve **İnternet** bölümündeki kayıtta görünür; hepsi tek anahtarla kapanır.
 - İsteğe bağlı **uygulama kilidi** oturumları ve şifreleri ayrıca bir ana şifreyle şifreler; uygulama her başladığında bir kez sorulur. Kilit, uygulama 15 dakika kullanılmayınca kendiliğinden yeniden kapanır (Güvenlik ekranından değiştirilir).
 - Uygulamadaki **Güvenlik** ekranı neyin saklandığını gösterir, klasörü açar, kilidi yönetir ve tüm verileri siler.
 - Ayrıntılar ve sınırlar: [SECURITY.md](SECURITY.md).
@@ -108,7 +124,7 @@ Riot bir güncellemede dosya ya da süreç adlarını değiştirirse `config.jso
 
 ## Yapı
 
-- `core/`: bütün mantık, arayüzden bağımsız. Riot Client'ın yerel arayüzü, süreçler ve klavye birer arayüzün arkasında durur; testler bunların sahteleriyle çalışır.
+- `core/`: bütün mantık, arayüzden bağımsız. Riot Client'ın yerel arayüzü, süreçler, klavye ve internet birer arayüzün arkasında durur; testler bunların sahteleriyle çalışır. İnternete çıkan her şey `core/src/net.rs` içindeki kapıdan geçer.
 - `src-tauri/`: pencere, tepsi, kısayollar, arka plan döngüsü.
 - `ui/`: düz HTML/CSS/JS, derleme adımı yok.
 

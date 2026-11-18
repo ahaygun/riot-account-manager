@@ -43,6 +43,10 @@
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5 7V5a3 3 0 0 1 6 0v2"/><rect x="3" y="7" width="10" height="7" rx="2"/></svg>
         <span>Güvenlik</span>
       </button>
+      <button type="button" class="nav" data-view="net" id="nav-net">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/></svg>
+        <span>İnternet</span><span id="net-state" class="count"></span>
+      </button>
       <button type="button" class="nav" data-view="log" id="nav-log">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h6"/></svg>
         <span>Tanı kaydı</span>
@@ -88,7 +92,8 @@
           <button type="button" role="radio" data-layout="rows" title="Satırlar" aria-label="Satırlar"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="2" y="3" width="12" height="2.4" rx="1.2"/><rect x="2" y="6.8" width="12" height="2.4" rx="1.2"/><rect x="2" y="10.6" width="12" height="2.4" rx="1.2"/></svg></button>
         </div>
       </div>
-      <button id="add" type="button" class="primary">Hesap ekle</button>
+      <button id="ranks-refresh" type="button" class="glyph" title="Rankları şimdi yenile" aria-label="Rankları şimdi yenile" hidden><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.2 6.2A5.5 5.5 0 0 0 3.3 5M2.8 9.8A5.5 5.5 0 0 0 12.7 11"/><path d="M13.4 2.6v3.6H9.8M2.6 13.4V9.8h3.6"/></svg></button>
+      <button id="add" type="button" class="primary" aria-label="Hesap ekle"><span class="roomy">Hesap ekle</span><span class="tight">Ekle</span></button>
     </header>
 
     <div id="update" class="banner accent" hidden>
@@ -104,6 +109,16 @@
     <div id="queue" class="banner" hidden>
       <p id="queue-text"></p>
       <button id="queue-cancel" type="button">İptal</button>
+    </div>
+
+    <div id="net-ask" class="banner ask" hidden>
+      <div>
+        <p><b>Hesaplarının güncel rankını göstermemi ister misin?</b></p>
+        <p class="hint">Açarsan her hesabın Riot ID'si ve bölgesiyle OP.GG'deki herkese açık sayfasına bakarım, profil simgelerini de Riot'un resim sunucusundan alırım. Şifrelerin ve oturumların hiçbir yere gönderilmez; kurulan her bağlantıyı İnternet bölümünde satır satır görebilirsin. Kapalı kalırsa uygulama eskisi gibi yalnızca güncelleme denetimi için GitHub'a bağlanır.</p>
+      </div>
+      <button id="net-yes" type="button" class="primary">Aç</button>
+      <button id="net-no" type="button">Kapalı kalsın</button>
+      <button id="net-more" type="button" class="link">Ayrıntı</button>
     </div>
 
     <div id="unsaved" class="banner accent" hidden>
@@ -140,6 +155,26 @@
         </span>
       </label>
 
+      <fieldset>
+        <legend>Güncel rank için</legend>
+        <p class="hint" id="edit-lookup-state"></p>
+        <span class="row">
+          <input id="edit-riot-id" type="text" maxlength="40" placeholder="Riot ID (Ad#ETİKET)" autocomplete="off" spellcheck="false">
+          <select id="edit-region" aria-label="Bölge">
+            <option value="">Bölge</option>
+            <option value="tr">TR</option><option value="euw">EUW</option><option value="eune">EUNE</option><option value="na">NA</option>
+            <option value="kr">KR</option><option value="br">BR</option><option value="jp">JP</option><option value="oce">OCE</option>
+            <option value="ru">RU</option><option value="lan">LAN</option><option value="las">LAS</option><option value="me">ME</option>
+            <option value="sea">SEA</option><option value="tw">TW</option><option value="vn">VN</option>
+          </select>
+        </span>
+        <span class="row">
+          <button id="edit-lookup-save" type="button">Kaydet</button>
+          <button id="edit-rank-refresh" type="button">Rankı şimdi yenile</button>
+          <button id="edit-profile" type="button">OP.GG'de aç</button>
+        </span>
+      </fieldset>
+
       <label>Not
         <input id="edit-note" type="text" maxlength="200" placeholder="Bu hesap hakkında kısa bir not" autocomplete="off">
       </label>
@@ -174,7 +209,7 @@
     <main class="form">
       <div id="wiz-choose" class="step">
         <p id="wiz-intro"></p>
-        <p class="hint">Eklediğin her şey bu bilgisayarda şifreli saklanır ve internete gönderilmez.</p>
+        <p class="hint">Şifreler ve oturumlar bu bilgisayarda şifreli saklanır ve hiçbir yere gönderilmez.</p>
         <button id="wiz-session" type="button" class="choice">
           <b>Giriş yaparak ekle</b>
           <span>Riot Client'ta bir kez giriş yaparsın, oturum saklanır. Şifre saklanmaz. Önerilen yol.</span>
@@ -400,11 +435,85 @@
     </main>
   </section>
 
+  <!-- The internet: what the app may use it for, and what it has used it for -->
+  <section id="view-net" class="view" hidden>
+    <header class="titlebar">
+      <h1>İnternet</h1>
+    </header>
+    <main class="form cols">
+      <p id="net-message" class="hint" role="status"></p>
+
+      <div class="card">
+        <div class="row-between">
+          <h2>Bağlantı</h2>
+          <span id="net-pill" class="pill"></span>
+        </div>
+        <label class="check"><input id="net-online" type="checkbox"> Uygulama internete bağlanabilir</label>
+        <p class="hint">Kapalıyken hiçbir bağlantı kurulmaz; güncelleme denetimi de durur ve yeni sürümleri elle indirmen gerekir. Hesap değiştirme internet gerektirmez, kapalıyken de aynı çalışır.</p>
+        <label class="check"><input id="net-ranks" type="checkbox"> League ranklarını OP.GG'den al</label>
+        <label class="check"><input id="net-icons" type="checkbox"> Profil simgelerini Riot'un resim sunucusundan al</label>
+        <label>Her hesabın rankına şu sıklıkta bak
+          <select id="net-every">
+            <option value="15">15 dakikada bir</option>
+            <option value="30">30 dakikada bir</option>
+            <option value="60">Saatte bir</option>
+            <option value="180">3 saatte bir</option>
+            <option value="720">12 saatte bir</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="card">
+        <h2>Ne gider, nereye gider</h2>
+        <dl class="flows">
+          <div>
+            <dt>League rankı</dt>
+            <dd class="hosts">op.gg, www.op.gg</dd>
+            <dd>Giden: hesabın Riot ID'si ve bölgesi. İkisi de herkese açık bilgi.</dd>
+          </div>
+          <div>
+            <dt>Profil simgesi</dt>
+            <dd class="hosts">ddragon.leagueoflegends.com</dd>
+            <dd>Giden: simgenin numarası.</dd>
+          </div>
+          <div>
+            <dt>Güncelleme</dt>
+            <dd class="hosts">github.com, objects.githubusercontent.com, release-assets.githubusercontent.com</dd>
+            <dd>Giden: sana ait hiçbir şey. Son sürümün numarası okunur; güncellersen kurulum dosyası indirilir ve imzası doğrulanmadan çalıştırılmaz. Ayarlar'dan ayrıca kapatılabilir.</dd>
+          </div>
+        </dl>
+        <ul>
+          <li>Şifreler, kayıtlı oturumlar, kullanıcı adları ve notlar hiçbir bağlantıda gönderilmez. Bağlantıyı kuran kod yalnızca bir adres ve uygulamanın adıyla sürümünü gönderebilir; başka bir şey ekleyemez.</li>
+          <li>Her internet bağlantısında olduğu gibi, bağlanılan sunucu IP adresini görür. OP.GG aynı adresten sorulan Riot ID'leri birlikte görür; bu senin için sorunsa rank almayı kapalı tut.</li>
+          <li>Bu listedeki adresler dışında bir yere bağlanma isteği, bağlantı kurulmadan reddedilir; yalnızca şifreli (HTTPS) bağlantı kurulur.</li>
+          <li>Bu pencerenin kendisi internete çıkamaz; gördüğün her şey uygulamanın çekirdeğinden veri olarak gelir.</li>
+        </ul>
+      </div>
+
+      <div class="card wide">
+        <div class="row-between">
+          <h2>Bağlantı kaydı</h2>
+          <span class="row">
+            <button id="net-reload" type="button">Yenile</button>
+            <button id="net-clear" type="button">Kaydı temizle</button>
+          </span>
+        </div>
+        <p class="hint">Uygulamanın kurduğu ve kurmayı reddettiği her bağlantı, en yenisi üstte. Hangi hesap için olduğu yazılmaz.</p>
+        <p id="net-empty" class="hint">Henüz hiçbir bağlantı kurulmadı.</p>
+        <table id="net-ledger" class="ledger" hidden>
+          <thead><tr><th>Zaman</th><th>Ne için</th><th>Nereye</th><th>Sonuç</th><th>Gelen</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </main>
+  </section>
+
   <!-- The diagnostic log, readable without leaving the app -->
   <section id="view-log" class="view" hidden>
     <header class="titlebar">
       <h1>Tanı kaydı</h1>
       <span class="spacer"></span>
+      <button id="log-bundle" type="button" title="Riot Client'ın ne sakladığını ve nasıl cevap verdiğini, kimlik içermeden bir dosyaya yazar">Tanı paketi oluştur</button>
       <button id="log-refresh" type="button">Yenile</button>
       <button id="log-copy" type="button" class="primary">Kopyala</button>
     </header>
@@ -414,6 +523,9 @@
       <ol id="log-lines" class="log" aria-label="Kayıt satırları"></ol>
     </main>
   </section>
+
+  <!-- What can be done with one account, on a right click -->
+  <div id="menu" class="menu" role="menu" hidden></div>
 
   <!-- Something to tell the user, wherever they are -->
   <div id="message" role="status" hidden>

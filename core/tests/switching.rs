@@ -161,6 +161,15 @@ impl ClientApi for World {
         let (puuid, _) = s.signed_in.clone()?;
         Some(Identity { riot_id: Some(format!("{puuid}#TR1")), puuid: Some(puuid), ban: s.ban })
     }
+    fn probe(&self, league: bool, path: &str) -> Option<(u16, serde_json::Value)> {
+        let s = self.sim();
+        let (puuid, token) = s.signed_in.clone()?;
+        if league {
+            return None;
+        }
+        // Answers full of things that must not be passed on.
+        Some((200, serde_json::json!({ "type": "authenticated", "subject": puuid, "accessToken": token, "path": path, "game_name": "GizliOyuncu" })))
+    }
     fn auth_problem(&self) -> Option<AuthProblem> {
         let s = self.sim();
         s.auth_problem.filter(|_| (s.auth_problem_is_old || !s.typed.is_empty()) && s.signed_in.is_none())
@@ -263,6 +272,7 @@ fn switcher(env: Env, w: &Arc<World>) -> Switcher {
         submit_retry: ms(60),
         game_start_wait: ms(30),
         manual_wait: ms(300),
+        net_gap: ms(0),
     };
     sw
 }
@@ -698,6 +708,7 @@ fn league_details_land_on_the_right_account() {
         riot_id: Some("Ana#TR1".into()),
         level: Some(212),
         rank: Some("Gold II 45 LP".into()),
+        ..LeagueInfo::default()
     });
     assert!(f.sw.refresh_league().unwrap());
     assert!(!f.sw.refresh_league().unwrap(), "no change, no write");
@@ -1577,4 +1588,256 @@ fn the_end_of_the_log_can_be_read_back_whole_lines_only() {
     let tail = f.sw.log_tail(200);
     assert!(tail.len() <= 200 && tail.ends_with("line number 49\n"));
     assert!(tail.lines().all(|l| l.split(' ').next().unwrap().parse::<u64>().is_ok()), "every line starts with its time: {tail}");
+}
+
+// ---- the internet -----------------------------------------------------------------
+
+use quickswitch_core::net::{Gate, NetSettings, Reply, Transport};
+use std::collections::HashMap;
+
+/// Stands in for the internet: answers from a table of addresses and
+/// remembers everything it was asked for.
+#[derive(Default)]
+struct Web {
+    pages: Mutex<HashMap<String, (u16, Vec<u8>)>>,
+    asked: Mutex<Vec<String>>,
+}
+
+struct WebTransport(Arc<Web>);
+
+impl Transport for WebTransport {
+    fn get(&self, url: &str, _max: usize) -> io::Result<Reply> {
+        self.0.asked.lock().unwrap().push(url.to_string());
+        let (status, body) = self.0.pages.lock().unwrap().get(url).cloned().unwrap_or((404, Vec::new()));
+        Ok(Reply { status, body, location: None })
+    }
+}
+
+impl Web {
+    fn put(&self, url: &str, status: u16, body: impl Into<Vec<u8>>) {
+        self.pages.lock().unwrap().insert(url.to_string(), (status, body.into()));
+    }
+    fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+/// A profile page in the layout `opgg.rs` reads.
+fn profile_page(description: &str, icon: u32, updated: &str) -> String {
+    format!(
+        r#"<html><head><meta name="description" content="{description}"/></head><body><img src="https://s.example/profile_icons/profileIcon{icon}.jpg"/><span>30</span><script>{{"initUpdatedAt": "{updated}"}}</script></body></html>"#
+    )
+}
+
+const ANA_PAGE: &str = "https://op.gg/lol/summoners/tr/puuid-A-TR1";
+const SMURF_PAGE: &str = "https://op.gg/lol/summoners/tr/puuid-B-TR1";
+const ONLINE: NetSettings = NetSettings { decided: true, online: true, lol_ranks: true, icons: true, refresh_minutes: 30 };
+
+/// Two accounts, a pretend internet, a clock that can be moved, and the
+/// user's yes to going online.
+fn online_fixture(name: &str) -> (Fixture, Arc<Web>, Arc<std::sync::atomic::AtomicU64>) {
+    let mut f = fixture(name);
+    let web = Arc::new(Web::default());
+    f.sw.net = Gate::new(Box::new(WebTransport(web.clone())), f.root.join("data").join("network.log"));
+    f.sw.timing.net_gap = Duration::ZERO;
+    let clock = Arc::new(std::sync::atomic::AtomicU64::new(1_800_000_000));
+    let c = clock.clone();
+    f.sw.clock = Arc::new(move || c.load(std::sync::atomic::Ordering::SeqCst));
+    two_accounts(&f);
+    f.sw.set_net_settings(ONLINE).unwrap();
+    (f, web, clock)
+}
+
+#[test]
+fn nothing_is_fetched_until_the_user_has_agreed() {
+    let (f, web, _) = online_fixture("net-consent");
+    // Back to a fresh install: the question has not been answered.
+    let mut cfg = f.sw.config().unwrap();
+    cfg.net = NetSettings::default();
+    save_json(&f.root.join("data").join("config.json"), &cfg).unwrap();
+    assert!(!f.sw.view().unwrap().net.decided);
+    assert!(f.sw.refresh_ranks(None, true).unwrap().paused);
+    assert!(f.sw.icon_png(6).is_none());
+    assert!(web.asked().is_empty(), "not one request");
+
+    // Saying no is also an answer, and it is kept.
+    f.sw.set_net_settings(NetSettings { online: false, ..NetSettings::default() }).unwrap();
+    assert!(f.sw.view().unwrap().net.decided);
+    assert!(f.sw.refresh_ranks(None, true).unwrap().paused);
+    assert!(web.asked().is_empty());
+}
+
+#[test]
+fn ranks_come_from_the_public_profile_and_only_the_riot_id_goes_out() {
+    let (f, web, _) = online_fixture("net-ranks");
+    f.sw.set_credentials("ana-hesap", "gizli_kullanici", "Gizli-Sifre-1").unwrap();
+    web.put(ANA_PAGE, 200, profile_page("puuid-A#TR1 / Gold 2 45 LP / 120Win 98Lose Win rate 55%", 4567, "2027-01-15T07:00:00Z"));
+    web.put(SMURF_PAGE, 200, profile_page("puuid-B#TR1 / Lv. 30", 12, "2027-01-15T07:00:00Z"));
+
+    let done = f.sw.refresh_ranks(None, true).unwrap();
+    assert_eq!((done.changed, done.not_found, done.failed, done.paused), (2, 0, 0, false));
+    let v = f.sw.view().unwrap();
+    let ana = &v.accounts[0].account;
+    assert_eq!(ana.rank.as_deref(), Some("Gold II 45 LP"));
+    assert_eq!((ana.wins, ana.losses, ana.icon, ana.level), (Some(120), Some(98), Some(4567), Some(30)));
+    assert_eq!(ana.rank_from.as_deref(), Some("opgg"));
+    assert_eq!(v.accounts[1].account.rank, None, "unranked is an answer too");
+    assert_eq!(v.accounts[1].account.icon, Some(12));
+
+    // What left the computer: two addresses, each a public Riot ID and a region.
+    assert_eq!(web.asked(), [ANA_PAGE, SMURF_PAGE]);
+    for sent in web.asked() {
+        assert!(!sent.contains("gizli") && !sent.contains("Gizli") && !sent.contains("Ana"), "{sent}");
+    }
+    // And what was written down about it holds no account at all.
+    let ledger = fs::read_to_string(f.root.join("data").join("network.log")).unwrap();
+    assert_eq!(ledger.lines().count(), 2);
+    assert!(!ledger.contains("puuid") && !ledger.contains("TR1"), "{ledger}");
+
+    // Asked again, nothing is new.
+    let again = f.sw.refresh_ranks(None, true).unwrap();
+    assert_eq!((again.changed, again.same), (0, 2));
+}
+
+#[test]
+fn the_clients_own_word_stands_until_the_page_is_about_a_later_time() {
+    let (f, web, clock) = online_fixture("net-fresher");
+    // Ana is signed in and the League client says Platinum, right now.
+    f.sw.switch("ana-hesap", None).unwrap();
+    f.sw.await_login("ana-hesap", None, &never).unwrap();
+    f.w.sim().league = Some(LeagueInfo { puuid: Some("puuid-A".into()), rank: Some("Platinum IV 10 LP".into()), level: Some(99), icon: Some(7), region: Some("euw".into()), ..LeagueInfo::default() });
+    assert!(f.sw.refresh_league().unwrap());
+    let ana = f.sw.view().unwrap().accounts[0].account.clone();
+    assert_eq!((ana.rank_from.as_deref(), ana.icon, ana.region.as_deref()), (Some("client"), Some(7), Some("euw")));
+
+    // The page is from an hour before that: only what the client does not say is taken.
+    let euw = "https://op.gg/lol/summoners/euw/puuid-A-TR1";
+    web.put(euw, 200, profile_page("puuid-A#TR1 / Gold 1 90 LP / 10Win 2Lose Win rate 83%", 1, "2027-01-15T07:00:00Z"));
+    f.sw.refresh_ranks(Some("ana-hesap"), false).unwrap();
+    let ana = f.sw.view().unwrap().accounts[0].account.clone();
+    assert_eq!(ana.rank.as_deref(), Some("Platinum IV 10 LP"), "looked up under the region the client reported");
+    assert_eq!((ana.wins, ana.icon, ana.level), (Some(10), Some(7), Some(99)));
+
+    // Days later the page is about a later time than the client's word.
+    clock.fetch_add(3 * 86_400, std::sync::atomic::Ordering::SeqCst);
+    web.put(euw, 200, profile_page("puuid-A#TR1 / Emerald 4 0 LP / 30Win 12Lose Win rate 71%", 1, "2027-01-17T00:00:00Z"));
+    f.sw.refresh_ranks(Some("ana-hesap"), false).unwrap();
+    let ana = f.sw.view().unwrap().accounts[0].account.clone();
+    assert_eq!((ana.rank.as_deref(), ana.rank_from.as_deref()), (Some("Emerald IV 0 LP"), Some("opgg")));
+}
+
+#[test]
+fn a_riot_id_that_does_not_exist_is_said_and_a_refusal_means_staying_away() {
+    let (f, web, clock) = online_fixture("net-problems");
+    web.put(SMURF_PAGE, 200, profile_page("puuid-B#TR1 / Silver 4 29 LP / 3Win 4Lose Win rate 43%", 5, "x"));
+    // Ana's page does not exist.
+    let done = f.sw.refresh_ranks(None, true).unwrap();
+    assert_eq!((done.not_found, done.changed), (1, 1));
+    assert_eq!(f.sw.view().unwrap().accounts[0].account.lookup_problem.as_deref(), Some("not_found"));
+
+    // The site says "too many requests": the round ends and nothing more is asked for a while.
+    web.put(ANA_PAGE, 429, "");
+    let before = web.asked().len();
+    let done = f.sw.refresh_ranks(None, true).unwrap();
+    assert!(done.paused);
+    assert_eq!(web.asked().len(), before + 1, "stopped at the refusal, Smurf was not asked for");
+    assert!(f.sw.refresh_ranks(None, true).unwrap().paused);
+    assert_eq!(web.asked().len(), before + 1, "and stays away");
+    clock.fetch_add(16 * 60, std::sync::atomic::Ordering::SeqCst);
+    web.put(ANA_PAGE, 200, profile_page("puuid-A#TR1 / Lv. 12", 5, "x"));
+    assert!(!f.sw.refresh_ranks(None, true).unwrap().paused, "until the pause is over");
+    assert_eq!(f.sw.view().unwrap().accounts[0].account.lookup_problem, None);
+
+    // A page that is not a profile is a failure, not an answer.
+    web.put(ANA_PAGE, 200, "<html>maintenance</html>");
+    web.put(SMURF_PAGE, 200, "<html>maintenance</html>");
+    let done = f.sw.refresh_ranks(None, true).unwrap();
+    assert_eq!((done.failed, done.paused), (2, true), "two unreadable answers in a row: the site changed");
+    assert_eq!(f.sw.view().unwrap().accounts[1].account.rank.as_deref(), Some("Silver IV 29 LP"), "what was known is kept");
+}
+
+#[test]
+fn accounts_are_looked_up_when_due_and_only_those_that_can_be() {
+    let (f, web, clock) = online_fixture("net-due");
+    web.put(ANA_PAGE, 200, profile_page("puuid-A#TR1 / Lv. 1", 1, "x"));
+    web.put(SMURF_PAGE, 200, profile_page("puuid-B#TR1 / Lv. 1", 1, "x"));
+    // One that only plays VALORANT, one with nothing to look it up by.
+    f.sw.set_game("smurf", Game::Valorant).unwrap();
+    f.sw.add_with_credentials("Şifreli", "user", "pw", Game::Lol).unwrap();
+
+    let done = f.sw.refresh_ranks(None, false).unwrap();
+    assert_eq!(web.asked(), [ANA_PAGE], "League accounts with a Riot ID");
+    assert_eq!(done.skipped, 1, "the one without a Riot ID is counted, not asked for");
+    f.sw.refresh_ranks(None, false).unwrap();
+    assert_eq!(web.asked().len(), 1, "not again within the half hour");
+    clock.fetch_add(31 * 60, std::sync::atomic::Ordering::SeqCst);
+    f.sw.refresh_ranks(None, false).unwrap();
+    assert_eq!(web.asked().len(), 2, "again once it is due");
+
+    // What to look an account up by can be given by hand, and is checked.
+    let id = f.sw.view().unwrap().accounts[2].account.id.clone();
+    assert!(matches!(f.sw.set_lookup(&id, "no tag", "tr"), Err(Error::BadRiotId)));
+    assert!(matches!(f.sw.set_lookup(&id, "Yeni#TR1", "moon"), Err(Error::BadRegion)));
+    f.sw.set_lookup(&id, " Yeni#TR1 ", "EUW").unwrap();
+    web.put("https://op.gg/lol/summoners/euw/Yeni-TR1", 200, profile_page("Yeni#TR1 / Iron 4 0 LP / 0Win 5Lose Win rate 0%", 9, "x"));
+    assert_eq!(f.sw.refresh_ranks(Some(&id), false).unwrap().changed, 1);
+    assert_eq!(f.sw.view().unwrap().accounts[2].account.rank.as_deref(), Some("Iron IV 0 LP"));
+}
+
+#[test]
+fn an_icon_picture_is_fetched_once_and_only_a_picture_is_kept() {
+    let (f, web, _) = online_fixture("net-icons");
+    let png: Vec<u8> = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3].to_vec();
+    web.put("https://ddragon.leagueoflegends.com/api/versions.json", 200, r#"["16.22.1","16.21.1"]"#);
+    web.put("https://ddragon.leagueoflegends.com/cdn/16.22.1/img/profileicon/4567.png", 200, png.clone());
+    web.put("https://ddragon.leagueoflegends.com/cdn/16.22.1/img/profileicon/13.png", 200, "<html>not a picture</html>");
+
+    assert_eq!(f.sw.icon_png(4567), Some(png.clone()));
+    assert_eq!(f.sw.icon_png(4567), Some(png), "the second time from the folder");
+    assert_eq!(web.asked().len(), 2, "the version once, the picture once");
+    assert_eq!(f.sw.icon_png(13), None, "not a PNG: thrown away");
+    assert!(!f.root.join("data").join("icons").join("13.png").exists());
+
+    // With pictures turned off, what is already here still shows; nothing new is fetched.
+    f.sw.set_net_settings(NetSettings { icons: false, ..ONLINE }).unwrap();
+    let before = web.asked().len();
+    assert!(f.sw.icon_png(4567).is_some());
+    assert_eq!(f.sw.icon_png(99), None);
+    assert_eq!(web.asked().len(), before);
+
+    // A version that is not a version never becomes part of an address.
+    let (g, web, _) = online_fixture("net-icons-bad");
+    web.put("https://ddragon.leagueoflegends.com/api/versions.json", 200, r#"["../../evil"]"#);
+    assert_eq!(g.sw.icon_png(1), None);
+    assert_eq!(web.asked().len(), 1);
+}
+
+#[test]
+fn a_diagnostic_bundle_says_how_things_stand_and_not_who_anyone_is() {
+    let (f, web, _) = online_fixture("diagnose");
+    f.sw.set_credentials("ana-hesap", "gizli_kullanici", "Gizli-Sifre-1").unwrap();
+    f.sw.set_note("ana-hesap", "GizliNot").unwrap();
+    web.put(ANA_PAGE, 200, profile_page("puuid-A#TR1 / Gold 2 45 LP / 1Win 1Lose Win rate 50%", 1, "x"));
+    f.sw.refresh_ranks(None, true).unwrap();
+    f.sw.switch("ana-hesap", None).unwrap();
+    f.sw.await_login("ana-hesap", None, &never).unwrap();
+
+    let bundle = f.sw.diagnostics("9.9.9");
+    assert_eq!(bundle["quickswitch"], "9.9.9");
+    assert_eq!(bundle["accounts"].as_array().unwrap().len(), 2);
+    assert_eq!(bundle["accounts"][0]["has password"], true);
+    assert_eq!(bundle["accounts"][0]["rank from"], "opgg");
+    assert_eq!(bundle["internet"]["online"], true);
+    let session = &bundle["riot client answers"]["/rso-auth/v1/session"];
+    assert_eq!(session["status"], 200);
+    assert_eq!(session["shape"]["type"], "authenticated", "what state the client is in");
+    assert_eq!(bundle["league client answers"]["/lol-summoner/v1/current-summoner"], "no answer");
+    assert_eq!(bundle["session files"][0]["kind"], "file");
+    assert!(bundle["session files"][0]["outline"].as_array().is_some_and(|o| !o.is_empty()));
+    assert!(bundle["log"].as_array().is_some_and(|l| !l.is_empty()));
+
+    let text = serde_json::to_string_pretty(&bundle).unwrap().to_lowercase();
+    for secret in ["gizli", "puuid-a", "puuid-b", "a-1", "ana hesap", "smurf", "ana-hesap", "tr1"] {
+        assert!(!text.contains(secret), "the bundle holds {secret:?}");
+    }
 }

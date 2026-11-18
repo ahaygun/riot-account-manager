@@ -51,6 +51,10 @@ pub struct LeagueInfo {
     pub level: Option<u64>,
     /// Solo queue, e.g. "Gold II 45 LP"; `None` when unranked.
     pub rank: Option<String>,
+    /// Number of the profile icon in use.
+    pub icon: Option<u32>,
+    /// The server the account plays on, as one of `opgg::REGIONS`.
+    pub region: Option<String>,
 }
 
 pub trait ClientApi: Send + Sync {
@@ -70,6 +74,12 @@ pub trait ClientApi: Send + Sync {
     /// What stands in the way of a sign-in that was just sent, if the
     /// client says. `None` both for "nothing" and for "does not say".
     fn auth_problem(&self) -> Option<AuthProblem> {
+        None
+    }
+    /// For diagnostics only: the status and JSON of a GET on one of the
+    /// two local clients (`league` picks the League client). `None` when
+    /// that client is not there to ask.
+    fn probe(&self, _league: bool, _path: &str) -> Option<(u16, Value)> {
         None
     }
 }
@@ -331,6 +341,18 @@ impl ClientApi for LocalApi {
         (id != Identity::default()).then_some(id)
     }
 
+    fn probe(&self, league: bool, path: &str) -> Option<(u16, Value)> {
+        let access = if league {
+            self.remembered_league_dir().and_then(|d| read_lockfile(&d.join("lockfile"))).or_else(|| self.find_league())?
+        } else {
+            self.riot()?
+        };
+        let url = format!("{}://127.0.0.1:{}{}", access.scheme, access.port, path);
+        let resp = http().get(url).basic_auth("riot", Some(&access.password)).send().ok()?;
+        let status = resp.status().as_u16();
+        Some((status, resp.json::<Value>().unwrap_or(Value::Null)))
+    }
+
     fn auth_problem(&self) -> Option<AuthProblem> {
         let answer = get(&self.riot()?, "/rso-authenticator/v1/authentication").ok().flatten()?;
         auth_problem_from(&answer)
@@ -355,6 +377,12 @@ impl ClientApi for LocalApi {
             riot_id: riot_id(text(&me, "gameName"), text(&me, "tagLine")),
             level: me.get("summonerLevel").and_then(Value::as_u64),
             rank: rank_from(&stats),
+            icon: me.get("profileIconId").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()),
+            region: self
+                .league_get("/riotclient/region-locale")
+                .and_then(|r| text(&r, "region"))
+                .and_then(|r| crate::opgg::region_code(&r))
+                .map(str::to_string),
         })
     }
 

@@ -543,3 +543,77 @@ legend { color: var(--mist); font-size: 12px; padding: 0 6px; }
   .brand { padding-left: 5px; }
   .track-who { width: 120px; }
 }
+
+/* ---- the face of an account: its icon with the crest in the corner ---- */
+.portrait { position: relative; display: grid; place-items: center; flex: none; }
+.portrait img { width: 48px; height: 48px; border-radius: 14px; display: block; box-shadow: 0 0 0 2px color-mix(in srgb, var(--tier) 70%, var(--edge)); }
+.portrait.pictured { margin-right: 12px; margin-bottom: 8px; }
+.portrait.pictured .crest { position: absolute; right: -28px; bottom: -28px; margin: 0; filter: drop-shadow(0 2px 5px rgba(4, 6, 14, .7)); }
+#accounts.cards .portrait { grid-area: crest; }
+#accounts.rows .portrait img { width: 38px; height: 38px; border-radius: 11px; }
+#accounts.rows .portrait.pictured { margin-right: 10px; margin-bottom: 4px; }
+#accounts.rows .portrait.pictured .crest { right: -22px; bottom: -22px; }
+.account .detail .record { color: var(--paper); font-variant-numeric: tabular-nums; }
+
+/* ---- the question about the internet ---- */
+.banner.ask { align-items: flex-start; box-shadow: inset 0 0 0 1px var(--brass-deep); }
+.banner.ask > div { flex: 1; display: grid; gap: 4px; }
+.banner.ask button { align-self: center; }
+
+/* ---- the internet page ---- */
+.card.wide { grid-column: 1 / -1; }
+.ledger { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ledger th { text-align: left; font-weight: 400; color: var(--mist); padding: 0 10px 6px 0; }
+.ledger td { padding: 6px 10px 6px 0; border-top: 1px solid rgba(50, 58, 92, .5); vertical-align: top; }
+.ledger td:nth-child(3) { font-family: ui-monospace, Consolas, monospace; font-size: 11px; white-space: nowrap; }
+.ledger td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ledger tr.bad td:nth-child(4) { color: var(--rose); }
+.ledger tr.quiet td { color: var(--mist); }
+.form .row select { width: auto; flex: none; }
+
+/* ---- the menu on a right click ---- */
+.menu {
+  position: fixed;
+  z-index: 8;
+  display: grid;
+  min-width: 190px;
+  padding: 5px;
+  border-radius: 12px;
+  background: var(--slate-up);
+  box-shadow: 0 16px 40px rgba(4, 6, 14, .6), inset 0 0 0 1px var(--edge);
+  animation: view-in .12s var(--ease);
+}
+.menu button { padding: 8px 12px; border-radius: 8px; background: none; text-align: left; font-size: 13px; }
+.menu button:hover, .menu button:focus-visible { background: var(--ink); outline: none; }
+
+/* A button that is only its picture. */
+button.glyph { flex: none; display: grid; place-items: center; width: 40px; padding: 0; align-self: stretch; color: var(--mist); }
+button.glyph:hover { color: var(--paper); }
+button.glyph svg { width: 16px; height: 16px; }
+button.glyph:disabled svg { animation: turning .9s linear infinite; }
+@keyframes turning { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { button.glyph:disabled svg { animation: none; } }
+/* The record gives way before the level does. */
+.account .detail .record { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dl.flows { display: grid; gap: 0; margin: 0; }
+dl.flows > div { display: grid; gap: 3px; padding: 10px 0; border-top: 1px solid rgba(50, 58, 92, .5); }
+dl.flows > div:first-child { border-top: 0; padding-top: 2px; }
+dl.flows dt { font-weight: 600; font-size: 13px; }
+dl.flows dd { margin: 0; font-size: 12px; color: var(--mist); line-height: 1.5; }
+dl.flows dd.hosts { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--mint); overflow-wrap: anywhere; }
+.account .detail { gap: 10px; }
+.account .detail .record { flex: none; }
+.account .detail .key { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- a narrow window: the bar gives up words before it gives up room ---- */
+.tight { display: none; }
+@media (max-width: 1000px) {
+  .bar { gap: 8px; padding-inline: 16px; }
+  #filter { min-width: 110px; }
+  .seg button { padding: 6px 8px; }
+  .tools { gap: 8px; }
+  .tools select { max-width: 112px; }
+  .roomy { display: none; }
+  .tight { display: inline; }
+  #accounts.rows .detail span:not(.record) { display: none; }
+}

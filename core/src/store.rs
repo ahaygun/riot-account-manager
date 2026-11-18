@@ -103,6 +103,21 @@ pub struct Account {
     pub region: Option<String>,
     /// A suspension from League that Riot reported at the last sign-in.
     pub ban: Option<Ban>,
+    /// Ranked wins and losses this season, when known.
+    pub wins: Option<u32>,
+    pub losses: Option<u32>,
+    /// Number of the profile icon.
+    pub icon: Option<u32>,
+    /// Unix seconds the rank above was true at, as far as its source said.
+    pub rank_at: u64,
+    /// Where the rank came from: "client" (the League client, while signed
+    /// in) or "opgg" (the public profile page).
+    pub rank_from: Option<String>,
+    /// Unix seconds of the last look at the public profile, whatever came of it.
+    pub looked_at: u64,
+    /// Why the last look found nothing: "not_found" when there is no such
+    /// Riot ID in that region.
+    pub lookup_problem: Option<String>,
 }
 
 /// A suspension from playing League.
@@ -153,6 +168,8 @@ pub struct Config {
     /// the list warns that it may have expired. Riot ends sessions that go
     /// unused; it does not say after how long. Zero turns the warning off.
     pub stale_after_days: u32,
+    /// What the app may use the internet for. See `net.rs`.
+    pub net: crate::net::NetSettings,
 }
 
 impl Default for Config {
@@ -180,6 +197,7 @@ impl Default for Config {
             window_hotkey: "Ctrl+Shift+Space".into(),
             auto_lock_minutes: 15,
             stale_after_days: 7,
+            net: crate::net::NetSettings::default(),
         }
     }
 }

@@ -1,135 +1,203 @@
-# QuickSwitch yol haritası: League Accounts'tan alınacaklar ve onu geçmek
+# QuickSwitch yol haritası (ikinci sürüm)
 
-Durum tarihi: 18 Kasım 2026. Bu belge 0.5.0 ile birlikte depoya girdi; 4. bölüm neyin yapıldığını, neyin kaldığını söyler.
-Karşılaştırılan sürüm: [Tariolle/LeagueAccounts](https://github.com/Tariolle/LeagueAccounts) v3.5.0 (`cb2a30d`), kaynak kodu okunarak.
+Durum tarihi: 18 Kasım 2026. Bu belge 0.6.0 ile birlikte güncellendi.
 
-Bu belgedeki "onlar şunu yapıyor" cümleleri kodlarından okundu. Riot Client'ın nasıl davrandığına dair olanlar ise onların koduna dayanan varsayımlardır; biz doğrulamadık. Her işin yanında neyin burada test edilebildiği, neyin ancak gerçek istemcide görüleceği yazıyor.
+Bu belge, benzer on uygulamanın taranmasıyla çıkarılan fikirlerin tamamını, her biri için verilen kararı ve bunlara göre yeniden kurulan sürüm planını içerir. Önceki yol haritasının yerini alır.
 
-## 1. İki uygulama nerede duruyor
+## 1. Nelere bakıldı
 
-| Konu | QuickSwitch | League Accounts |
+| Uygulama | Nasıl incelendi | Öne çıkan yanı |
 |---|---|---|
-| Giriş yöntemi | Kayıtlı oturumu yerine koyar; şifre gerekmez, captcha çıkmaz (ölçülen: 1,5 sn) | Her girişte şifreyle girer; captcha ve hız sınırına açık |
-| Şifreyle giriş (yedek yol) | UI Automation, olmazsa klavye; gerçek istemcide henüz doğrulanmadı | Riot'un giriş sayfasını içeriden sürer; pencere gizli, durumları tek tek bilir |
-| Giriş hatasını anlama | Tek mesaj: "şifre yanlış olabilir ya da doğrulama istiyor" | Yanlış şifre, captcha reddi, hız sınırı, doğrulama, hesap uyuşmazlığı, yönetici olarak çalışan istemci ayrı ayrı |
-| Ban | Yok | Girişte okur, kalan süreyi gösterir, oyunu başlatmaz |
-| Bölge | Denetlenmiyor | Oyundan önce istemcinin bölgesini hesabınkine çevirir |
-| Saklama | Her şey DPAPI ile şifreli, isteğe bağlı ana şifre, kendiliğinden kilit | Şifreler Windows Credential Manager'da, hesap listesi dosyada |
-| Veri taşıma | Yalnızca içe aktarma (0.4.5) | İçe ve dışa aktarma, toplu ekleme; dışa aktarma açık şifreli |
-| Rank | League istemcisinden, yalnızca giriş yapılan hesap için | OP.GG'den, giriş yapmadan, arka planda; duo filtresi |
-| Oyunlar | LoL, TFT, VALORANT | LoL, TFT |
-| Koruma | Maçta ve kuyrukta geçişi engeller, "bitince geç" | Açık istemciyi kapatmadan önce sorar |
-| Hızlı erişim | Hesap başına global kısayol, masaüstü kısayolu, tepsi | Uygulama içi kısayollar |
-| Liste | Sürükleyerek sıralama, oyun filtresi, arama | Rank/ad/seviye/bölgeye göre sıralama, kart ve liste görünümü, not |
-| İnternet | Yalnızca güncelleme denetimi | OP.GG ve güncelleme |
-| Güncelleme | İmzalı, tek kanal, geri dönüş yok | Yeni sürüm "sağlıklı" bildirene kadar eskisini saklar |
-| Testler (0.4.5'te) | Çekirdek uçtan uca (68), arayüz testi yok | Çekirdek, arayüz, kayıt gizliliği, CSP, güncelleme |
-| Dil | Türkçe | 6 dil |
+| [League Accounts](https://github.com/Tariolle/LeagueAccounts) v3.5.0 | Kaynak kodu ve arayüz metinlerinin tamamı | Şifreyle girişin sağlamlığı, ban, bölge, OP.GG rankları, duo filtresi |
+| [Hextech Manager](https://github.com/MarceloVarela/league-account-manager) | README (ayrıntılı) | Hesap envanteri, "filo" görünümü, kasa güvenliği, Windows Hello |
+| [League Account Switcher](https://github.com/Jonas-Merforth/league-account-switcher) | README | Gruplar, oyun içi yardımcılar, ayarları hesaplar arası taşıma |
+| [Game Account Switcher](https://github.com/UnNooble/game-account-switcher) | README ve giriş betiği | UI Automation ile giriş, uygulama içinde 2FA, çökmeye dayanıklı dosya değişimi |
+| [Riot Account Switcher](https://github.com/R-luiz/riot-account-switcher) | README | Windows Hello ile kilit |
+| [accshift](https://github.com/klNuno/accshift) | README | Komut paleti, yayıncı modu, komut satırı ve bağlantı protokolü |
+| [Arsenal](https://github.com/xfran1998/RiotAccManager) | README | Özel bölge etiketleri, geçiş adımları |
+| [Riot Fast Login](https://github.com/bahaaalden2200-design/riot-fast-login) | README | Sihirdar simgesi, yeni oturumu kendiliğinden yakalama |
+| [iMA Switcher](https://github.com/iMAboud/iMA-Switcher) | README özeti | VALORANT rankı, ayar eşitleme |
+| [V-Shift](https://github.com/Nanda070/V-Shift), [RiotSwitcher](https://github.com/kizcntt/RiotSwitcher), [Alt Hop](https://github.com/giovaniohira/alt-hop) | README | Temalar, oyun dili, yeniden yakalama |
 
-Özet: temel yöntemimiz daha iyi (şifresiz, hızlı, captcha'sız) ve saklama modelimiz daha sıkı. Onlar şifreli girişin sağlamlığında, hesap hakkında gösterilen bilgide, veri taşımada ve test genişliğinde önde.
+README'den aktarılanlar o uygulamaların kendi anlatımıdır; çalıştırıp doğrulamadım. Riot Client'ın davranışına dair her şey varsayımdır ve gerçek istemcide görülene kadar öyle kalır.
 
-## 2. İlke değişikliği: şifre gösterilebilir, ama bilerek
+## 2. 0.5.2 itibarıyla elimizde olanlar
 
-Bugüne kadar "kaydedilen şifre bir daha gösterilmez" diyorduk. Bundan sonra kural şu: **şifre, kullanıcı açıkça istediğinde ve ne olduğunu gördükten sonra uygulamadan çıkabilir.** Bunu onlardan daha iyi yapmanın yolu, çıkışın her biçimini ayrı ayrı korumak:
+Oturum değiştirerek giriş (şifresiz, captcha'sız), şifreyle yedek giriş (UI Automation, olmazsa klavye), "Oturumu açık tut" işaretleme, giriş hatası ayrımı, League banı, geniş pencere, kart ve satır görünümü, rank armaları, geçiş hattı, tanı kaydı ekranı, şifreli yedek, toplu ekleme, League Accounts ile içe ve dışa aktarma, şifre kopyalama, uygulama kilidi ve kendiliğinden kilit, not, sıralama, durum filtreleri, hesap başına global kısayol, masaüstü kısayolu, "oyun bitince geç", maçta ve kuyrukta koruma, VALORANT.
 
-- **Şifreyi kopyala.** Onay ister; uygulama kilidi açıksa ana şifreyi yeniden sorar. Pano kaydı Windows pano geçmişine ve bulut eşitlemesine girmeyecek biçimde yazılır, 30 saniye sonra silinir (yalnızca panoda hâlâ bizim yazdığımız duruyorsa). Onlar da böyle yapıyor; bizdeki fark ana şifre adımı.
-- **Şifreli yedek (varsayılan dışa aktarma).** Kullanıcının belirlediği parolayla, kilitte kullandığımız Argon2id + XChaCha20-Poly1305 ile şifrelenmiş tek dosya. Hesaplar, şifreler, kısayollar, notlar. Onlarda bunun karşılığı yok.
-- **Açık dışa aktarma (uyumluluk için).** League Accounts'un okuyabildiği JSON. Ayrı düğme, kırmızı uyarı, "şifreler açık yazılacak" onayı. Bu, bizden onlara geçişi de mümkün kılar.
+Taranan uygulamaların hiçbirinde bunların hepsi bir arada yok. Eksik kaldığımız yerler aşağıda.
 
-`SECURITY.md` ve Güvenlik ekranındaki "şifre bir daha ekranda gösterilmez" cümlesi bu sürümle birlikte değişmeli.
+### 0.6.0 ile gelenler
 
-## 3. İşler
+Taramadan sonra verilen kararlarla (6. bölüm) uygulama "internete bağlanmaz" olmaktan çıkıp "internete yalnızca gösterdiği kadar bağlanır" oldu.
 
+| Tablodaki madde | Ne geldi | Ne kaldı |
+|---|---|---|
+| B12 | Hesaba girmeden güncel League rankı, galibiyet/mağlubiyet ve seviye (OP.GG'nin herkese açık sayfasından), onayla ve kendiliğinden yenilenerek | Riot API anahtarı yolu alınmadı |
+| B1 | Profil simgesi (Riot'un resim sunucusundan, diskte saklanarak) | |
+| B2 | Tek/çift sırada galibiyet, mağlubiyet, kazanma oranı | Esnek sıra, geçen sezon, en yüksek lig |
+| B8 | Bölge hesapta saklanıyor, istemciden okunuyor, elle değiştirilebiliyor | Bölgeye göre süzme, A4 |
+| B9 | Riot ID'yi kopyalama, OP.GG'de açma | Porofessor, kullanıcı adını kopyalama |
+| C1 | Sağ tık menüsü | Çift tıkla düzenleme |
+| F1 | Tanı paketi: yerel uçların cevap biçimleri, oturum dosyalarının biçimi, ayarlar | Pencere ağacı dökümü |
+| A1 | Alanı yazmadan önce odaklama | Düğme için ikinci yol |
+| Yeni | İnternet kapısı (izinli sunucular, yalnızca HTTPS, yalnızca okuma), bağlantı kaydı, onay sorusu, ana anahtar | |
+
+## 3. Fikir dökümü
+
+Karar sütunu: **Al** (yapımıza uyuyor), **Uyarla** (fikri alıp kendi yolumuzla), **Karar** (senin tercihine bağlı), **Alma**.
 Büyüklük: K (bir oturum), O (birkaç oturum), B (denemeli, birden fazla sürüm).
-Doğrulama: **burada** = sahte istemciyle test edilebilir; **sende** = gerçek Riot Client gerekir.
 
-### A. Şifreli girişin sağlamlığı
+### A. Giriş ve geçiş
 
-**A1. Giriş hatalarını ayırmak** (K, kısmen burada)
-Onlar: sonucu giriş sayfasının içinden okuyor. Biz sayfanın içinde değiliz, ama yerel arayüzdeki `/rso-authenticator/v1/authentication` ucu doğrulama kodu istendiğini (`type: multifactor`) ve hata metnini veriyor.
-Yapılacak: şifreli girişten sonra bu ucu yoklayıp dört ayrı mesaj vermek: şifre reddedildi, doğrulama kodu bekleniyor, çok fazla deneme, captcha. Şifre reddedildiyse hesabı "şifre yanlış" diye işaretlemek ve yeniden denememek.
-Daha iyi olan: doğrulama kodu beklenirken pencereyi öne getirip kullanıcıya haber vermek, kod girilince oturumu kendiliğinden kaydetmek.
+| # | Fikir | Kimde | Bizde | Karar | Büyüklük |
+|---|---|---|---|---|---|
+| A1 | UI Automation'da alanı yazmadan önce odaklamak; giriş düğmesi bulunamazsa şifre alanının altındaki ilk etkin düğmeyi seçmek | Game Account Switcher | Kısmen | **Al.** Aynı yöntemi çalıştıran bir uygulamanın kuralları; bizimkini sağlamlaştırır | K |
+| A2 | Doğrulama kodunu uygulamada sorup Riot'un kutularına yazmak, kodun nereye gönderildiğini söylemek | Game Account Switcher | Yok | **Uyarla.** Geçiş hattına "Kod" durağı; A1 gerçek istemcide doğrulandıktan sonra | O |
+| A3 | Giriş sayfasını içeriden sürmek | League Accounts | Yok | **Karar.** Yalnızca UI Automation gerçek istemcide çalışmazsa | B |
+| A4 | Oyundan önce istemcinin bölgesini hesabınkine çevirmek | League Accounts, Arsenal | Yok | **Al.** Olası hatamız; önce farklı bölgeden iki hesapla doğrulanmalı | O |
+| A5 | Hesap başına oyun dili | League Accounts | Yok | **Uyarla.** A4 ile aynı uç; isteğe bağlı alan | K |
+| A6 | Oyun güncelleniyorsa ilerlemesini göstermek | League Accounts | Yok | **Al.** Geçiş hattına "Güncelleme" durağı, yüzdeyle | O |
+| A7 | Başka hesapla açık League istemcisini kapatmadan önce sormak | League Accounts, Game Account Switcher | Kısmen (maç ve kuyruk engelli, lobi değil) | **Al.** Lobideyken onay iste; bekleyen açık sorumuzu kapatır | K |
+| A8 | Banlı hesapta oyunu başlatmadan önce "yine de gir" onayı | League Accounts | Kısmen (yalnızca gösteriyoruz) | **Al** | K |
+| A9 | Oyun açıldıktan sonra League'in doğru hesapta olduğunu doğrulamak | League Accounts | Kısmen (Riot Client'ta bakıyoruz) | **Al** | K |
+| A10 | Dosya değişimini günlükleyip çökme sonrası geri almak | Game Account Switcher | Kısmen (yazımlar güvenli, değişim günlüksüz) | **Al.** Elektrik kesintisinde yarım kalmış değişimi sonraki açılışta toparlar | O |
+| A11 | Tuş, kamera ve görüntü ayarlarını hesaplar arası taşımak | League Account Switcher, Hextech Manager, iMA Switcher, accshift | Yok | **Al.** Dört uygulamada var, en çok istenen yardımcı; yalnızca yerel dosyalar | O |
+| A12 | Her yerden açılan hızlı geçiş paleti: küçük pencere, yaz ve Enter | Hextech Manager, accshift | Kısmen (pencere kısayolu var) | **Al.** Geniş pencere açılmadan geçiş | O |
+| A13 | Bütün oturumları tek seferde sınamak | Game Account Switcher, League Account Switcher | Yok (yalnızca gün sayıyoruz) | **Karar.** Kayıtlı oturumla Riot'un sunucularına bağlanmayı gerektirir | O |
+| A14 | Çevrimdışı görünmek | Game Account Switcher (Deceive ile), League Account Switcher, Hextech Manager | Yok | **Karar.** Deceive kuruluysa onun üzerinden başlatmak mümkün; Riot sohbeti değişince bozulabiliyor | O |
+| A15 | Son iki hesap arasında tek tuşla geçiş | Hiçbirinde | Yok | **Al.** Bizim fikrimiz | K |
 
-**A2. Yönetici olarak çalışan Riot Client** (K, burada)
-Onlar: başlatma hatası 740 ise ayrı mesaj veriyor. Bizde bu durumda geçiş anlaşılmaz biçimde başarısız olur. Aynı denetimi eklemek.
+### B. Hesap bilgisi
 
-**A3. İlerleme adımları ve iptal** (K, burada)
-Onlar: "istemci kapatılıyor, giriş yapılıyor, doğrulama, oyun başlatılıyor" adımlarını gösteriyor, iptal edilebiliyor.
-Yapılacak: satırdaki bekleme göstergesinin yanına adım metni ve İptal. Bugünkü logda gördüğümüz "takıldı sanıp yeniden tıklama" davranışını da çözer.
+Kural: bilgi önce League ya da Riot istemcisinden, o hesap açıkken okunur ve "son okunan" olarak saklanır. 0.6.0'dan beri, kullanıcı açtıysa, herkese açık kaynaklardan da güncellenir; istemciden okunan daha yeni bilgi her zaman önde gelir.
 
-**A4. Bölge denetimi** (O, sende) — olası hata
-Onlar: hesabın League bölgesi istemcinin bölgesiyle uyuşmuyorsa oyundan önce `PUT /riotclient/region-locale` ile düzeltiyor.
-Bizde: bölge ayarı `Riot Client/Config` içinde duruyor ve o klasöre bilerek dokunmuyoruz. Farklı bölgelerde hesabı olan biri için oyunun yanlış bölgeyle açılması mümkün. Önce doğrulanmalı: farklı bölgeden iki hesabın varsa birinden diğerine geçince League doğru sunucuya bağlanıyor mu?
-Daha iyi olan: bölgeyi hesap kaydında tutup geçişte baştan doğru ayarlamak.
+| # | Fikir | Kimde | Bizde | Karar | Büyüklük |
+|---|---|---|---|---|---|
+| B1 | Sihirdar simgesi | Riot Fast Login, Hextech Manager | Yok | **Uyarla.** League istemcisi açıkken simgeyi yerelden alıp saklamak; internete çıkmadan | O |
+| B2 | Esnek sıra rankı, galibiyet ve mağlubiyet, geçen sezon, en yüksek lig | Hextech Manager, League Accounts | Yalnızca tek/çift | **Al** | K |
+| B3 | TFT rankı ve LoL/TFT görünüm geçişi | League Accounts | Yok | **Al** | O |
+| B4 | Mavi öz, RP, şampiyon ve kostüm sayısı | Hextech Manager | Yok | **Al** (sayılar); tam envanter D bölümünde | O |
+| B5 | Son on maçın form çizgisi | Hextech Manager | Yok | **Uyarla.** Kartta küçük çizgi; sonraya | O |
+| B6 | Duo filtresi: bir arkadaşın rankıyla oynayabilecek hesaplar | League Accounts | Yok | **Al.** Kayıtlı ranklar üzerinden; kurallar yazılırken doğrulanacak | K |
+| B7 | Rank dağılımı | League Accounts | Yok | **Al.** Soldaki sayıların yanına | K |
+| B8 | Bölge etiketi ve bölgeye göre süzme | League Accounts, Arsenal | Yalnızca içe aktarmada taşınıyor | **Al.** A4 ile birlikte | K |
+| B9 | Kullanıcı adını ve Riot ID'yi kopyalamak, OP.GG ve Porofessor bağlantıları | League Accounts, League Account Switcher | Yok | **Al.** Bağlantı senin tarayıcında açılır, uygulama bağlanmaz | K |
+| B10 | Hesap künyesi: açılış tarihi, Riot ID geçmişi, 2FA durumu, maskeli e-posta | Hextech Manager | Yok | **Uyarla.** Alan adları gerçek istemcide görüldükten sonra | O |
+| B11 | Uzun süredir oynanmayan hesapta rank düşüşü uyarısı | Hextech Manager | Kısmen (oturum için) | **Uyarla.** Kurallar doğrulanınca | K |
+| B12 | Giriş yapmadan rank (OP.GG ya da Riot API anahtarı) | League Accounts, Hextech Manager | Yok | **Karar.** "İnternete bağlanmaz" sözünü bozar | O |
+| B13 | VALORANT rankı | iMA Switcher | Yok | **Karar.** Riot'un sunucularına hesabın tokenıyla bağlanmayı gerektirir | O |
 
-**A5. Giriş sayfasını içeriden sürmek** (B, sende) — koşullu
-Onlar: Riot Client arayüzünü bir hata ayıklama kapısıyla kendileri başlatıp sayfada küçük bir betik çalıştırıyor. Klavye yok, odak yok.
-Karar: 0.4.4'teki UI Automation yolunun logu gelince verilecek. Sayfa onu kabul ediyorsa bu işe gerek yok. Etmiyorsa bu yöntem, "Oturumu açık tut" işaretlemesiyle birlikte yazılır; böylece onlardan farklı olarak şifre hesap başına bir kez kullanılır.
-Bedeli: giriş süresince yerel bir hata ayıklama kapısı açık kalır (yalnızca 127.0.0.1, rastgele kapı, giriş bitince kapanır) ve Riot'un iç yapısına bağımlılık artar. Kodları MIT lisanslı; betikten parça alınırsa telif notu korunmalı.
+### C. Arayüz ve düzen
 
-### B. Hesap hakkında bilgi
+| # | Fikir | Kimde | Bizde | Karar | Büyüklük |
+|---|---|---|---|---|---|
+| C1 | Sağ tık menüsü, çift tıkla düzenleme | League Accounts | Yok | **Al** | K |
+| C2 | Kısayollar sayfası; ara, ekle, ayarlar, sil için tuşlar | League Accounts | Kısmen | **Al** | K |
+| C3 | Hesapları gruplamak, grupları daraltmak (pencerede ve tepside) | League Account Switcher, Hextech Manager, accshift | Yok | **Al** | O |
+| C4 | Arayüz boyutu | League Accounts | Yok | **Al** | K |
+| C5 | Diller | League Accounts (6), accshift (7) | Türkçe | **Al.** Önce İngilizce; metinler tek dosyaya | O |
+| C6 | Yayıncı modu: OBS açıkken adları gizlemek | Hextech Manager, accshift | Yok | **Al** | K |
+| C7 | Geri alınabilir silme (çöp) | Hextech Manager | Yok | **Al.** Yanlışlıkla silinen hesabın şifresi ve oturumu geri gelir | K |
+| C8 | Açık tema | Hextech Manager, V-Shift | Yok | **Uyarla.** Sonraya; renkler zaten değişkenlerde | O |
+| C9 | Uygulama içi yardım | League Account Switcher | README | **Uyarla.** Boş durumlar ve ipuçlarıyla; ayrı sayfa değil | K |
+| C10 | Riot Client konumunu arayüzden değiştirmek | Arsenal, Game Account Switcher | Yalnızca config.json | **Al** | K |
+| C11 | Arayüz öğelerini gizleyip gösterme | iMA Switcher | Yok | **Alma.** Görünüm seçimi yeterli | |
 
-**B1. Ban denetimi** (K, burada + sende)
-Onlar: girişten sonra kimlik bilgisindeki `ban.restrictions` listesinden League banını okuyor (süreli ya da kalıcı), oyunu başlatmıyor.
-Bizde bu bilgi zaten çağırdığımız uçtan geliyor.
-Daha iyi olan: banı hesap kaydında tutup listede giriş yapmadan da geri sayım göstermek; süre dolunca kendiliğinden kaldırmak; VALORANT kısıtlamalarını da okumak (alan adları loga yazılıp görüldükten sonra).
+### D. Çoklu hesap görünümü ("filo")
 
-**B2. Not, sıralama, sıkışık görünüm** (O, burada)
-Hesap başına kısa not; ada, ranka, seviyeye ve son kullanıma göre sıralama; çok hesap için tek satırlık liste. Arama notları da tarar. Elle sıralama varsayılan kalır.
+Tek hesaplı araçların yapamadığı şey: bütün hesaplara birden bakmak. Yalnızca Hextech Manager'da var.
 
-**B3. Giriş yapmadan rank ve duo filtresi** (O, sende) — isteğe bağlı
-Onlar: OP.GG'den çekiyor. Bizde "uygulama internete bağlanmaz" sözü var.
-Yapılacak, istenirse: varsayılanı kapalı bir ayar; açılınca Güvenlik ekranında hangi adrese ne gönderildiği (yalnızca Riot ID ve bölge) yazar. Giriş yapılan hesapta League istemcisinden okunan değer her zaman önceliklidir.
+| # | Fikir | Karar | Büyüklük |
+|---|---|---|---|
+| D1 | Bir kostümün ya da şampiyonun hangi hesaplarda olduğunu bulmak | **Al** | O |
+| D2 | Toplam: şampiyon, kostüm, mavi öz, RP | **Al** | K |
+| D3 | Hangi hesaplar şifresiz açılır, hangileri şifre ister | **Al.** Bizde bu bilgi zaten var | K |
+| D4 | Hesap tablosunu CSV olarak vermek (şifresiz) | **Al** | K |
+| D5 | Destek başvurusu için hesap özeti sayfası | **Uyarla.** B10'dan sonra | K |
 
-### C. Veri taşıma
+### E. Güvenlik ve kasa
 
-**C1. Toplu ekleme** (K, burada)
-Satır başına `kullanıcı--Riot ID--şifre` ya da `kullanıcı--şifre`; onların biçimiyle aynı, böylece ellerindeki listeler doğrudan yapıştırılır. Eklemeden önce kaç hesabın ekleneceğini ve hangilerinin atlanacağını gösteren önizleme. Onlarda önizleme yok.
+| # | Fikir | Kimde | Bizde | Karar | Büyüklük |
+|---|---|---|---|---|---|
+| E1 | Windows Hello ile kilit açmak; ana şifre her zaman geçerli kalır | Riot Account Switcher, Hextech Manager | Yok | **Al.** Kilidi kullanmayı kolaylaştırır | B |
+| E2 | Windows kilitlenince uygulamayı da kilitlemek | Hextech Manager | Yalnızca boşta kalınca | **Al** | K |
+| E3 | Aynı şifrenin kaç hesapta kullanıldığını söylemek | Hextech Manager | Yok | **Al.** Yerelde karşılaştırma, şifre gösterilmeden | K |
+| E4 | Şifre geçmişi: yanlış yazılan yeni şifrede eskisine dönmek | Hextech Manager | Yok | **Al** | K |
+| E5 | Kilit kapalıyken şifre çıkışı | Bizim açık sorumuz | Uyarıyla serbest | **Karar.** Kapatmak ya da Windows doğrulaması istemek | K |
+| E6 | Yedek sağlığı: son yedek ne zaman, kasayla aynı diskte mi | Hextech Manager | Yok | **Al** | K |
+| E7 | Kod imzalama | accshift | Yok | **Karar.** Ücretli sertifika | |
 
-**C2. Şifreli yedek ve geri yükleme** (O, burada)
-Bölüm 2'deki dosya. İçe aktarma kullanıcı adına ve hesap kimliğine göre eşleştirir, çakışanı atlar ya da üzerine yazar. Oturumlar isteğe bağlı eklenir; başka bilgisayarda Riot'un onları kabul edip etmediği denenmeden söz verilmez.
+### F. Dayanıklılık ve bakım
 
-**C3. Açık dışa aktarma ve şifre kopyalama** (K, burada + sende)
-Bölüm 2'deki koruma adımlarıyla. Pano davranışı gerçek Windows'ta denenmeli.
+| # | Fikir | Kimde | Karar | Büyüklük |
+|---|---|---|---|---|
+| F1 | **Tanı paketi:** Riot Client'ın ne sakladığını, pencere ağacını ve yerel uçların cevap biçimlerini değerler olmadan toplamak | Hextech Manager (lam-diag), Game Account Switcher (pencere dökümü), League Account Switcher (olay kaydedici) | **Al, ilk iş.** Gerçek istemciyi göremiyoruz; bu paket varsayımları olguya çevirir | O |
+| F2 | Onarım: istemcileri kapat, bayat lockfile'ı sil | Hextech Manager | **Al.** Tanı kaydı sayfasına | K |
+| F3 | Yedeğe oturumları da eklemek | Game Account Switcher | **Karar.** Başka bilgisayarda çalıştığı denenince | K |
+| F4 | Kaldırırken veriyi de silmeyi sormak | Game Account Switcher | **Al** | K |
+| F5 | Güncellemeyi arka planda indirip boştayken yeniden başlamak | League Accounts | **Uyarla.** İsteğe bağlı ayar | O |
+| F6 | Yeni sürüm açılamazsa öncekine dönmek | League Accounts | **Al** | O |
+| F7 | Erken sürüm kanalı | Bizim fikrimiz | **Al.** Kullanıcı sayısı artınca şart | O |
+| F8 | Arayüz, CSP ve açılış testlerini Actions'ta koşturmak | League Accounts | **Al** | O |
 
-### D. Yayın ve test
+### G. Oyun içi yardımcılar
 
-**D1. Arayüz testleri** (O, burada)
-Arayüzü zaten her değişiklikte sahte verilerle başsız tarayıcıda elle deniyorum. Bunu depoya girecek bir test dosyasına çevirip Actions'ta çalıştırmak: liste, ekleme sihirbazı, ayarlar, güvenlik, içe aktarma, kilit ekranı.
+Bunlar hesap değiştirmenin ötesine geçip League istemcisinin içinde iş yapar. Hextech Manager'ın kendi belgesi Riot'un kullanım koşullarının istemciyle etkileşen izinsiz programları yasakladığını not ediyor; hangisinin sorun sayıldığını doğrulamadım.
 
-**D2. Kayıt gizliliği testi** (K, burada)
-Onlar: loga yalnızca sabit olay kodları yazıyor. Bizde okunabilir cümleler var ve gizlilik yazarın dikkatine bağlı.
-Yapılacak: bütün akışları belirgin sahte kullanıcı adı, şifre, token ve hesap adıyla çalıştırıp logda hiçbirinin geçmediğini doğrulayan test. Okunabilir logu koruyup onların güvencesini almış oluruz.
+| # | Fikir | Kimde | Karar |
+|---|---|---|---|
+| G1 | Maç bulununca kendiliğinden kabul | League Account Switcher | **Karar.** Yaygın ama kapsam dışına çıkış; istersen ayrı ve kapalı gelen bir ayar |
+| G2 | İstemci bildirimlerini temizlemek, ödülleri almak | League Account Switcher | **Alma.** Hesap değiştiricinin işi değil |
+| G3 | Hesaplar arası birleşik arkadaş listesi ve sohbet | League Account Switcher | **Alma.** Arka planda birden çok hesaba Riot sunucularında oturum açar |
 
-**D3. Erken sürüm kanalı** (O, sende)
-Bugün her commit herkese gidiyor. Yapılacak: "Erken sürümleri al" ayarı. Yeni sürüm önce ön yayın olarak çıkar, yalnızca bu ayarı açanlara gider; sen deneyip onaylayınca herkese açılır. "Kimse bilmiyor" durumu değişince gerekecek.
+### H. Otomasyon
 
-**D4. Güncelleme sonrası sağlık denetimi** (O, sende)
-Onlar: yeni sürüm açılıp "hazırım" diyene kadar eski dosyayı saklıyor.
-Bizde kurulum dosyası kullanıldığı için aynı yöntem birebir uymaz. Karşılığı: güncellemeden önce önceki kurulum dosyasını saklamak; yeni sürüm iki kez üst üste açılamazsa bir sonraki açılışta "önceki sürüme dön" önermek.
+| # | Fikir | Kimde | Bizde | Karar | Büyüklük |
+|---|---|---|---|---|---|
+| H1 | Komut satırı: listele, geç, kilitle | accshift, V-Shift, Riot Fast Login | Yalnızca `--switch` | **Al** | K |
+| H2 | Bağlantı protokolü (`quickswitch://`), Stream Deck için | accshift | Yok | **Al** | K |
 
-## 4. Durum
+## 4. Fazlamız: kimsede olmayanlar
 
-0.5.0 ile tek pakette çıkanlar: geniş pencere ve yeni arayüz (ray, kartlar, geçiş hattı, tanı kaydı ekranı), A1, A2, A3, B1 (League banı; VALORANT sonra), B2, C1, C2, C3, D2 ve D1'in ilk hali (`tests/ui/test_ui.py`; henüz Actions'ta koşmuyor, elle çalıştırılıyor).
+1. **Görünen internet.** Rakipler rankı OP.GG'den ya da API anahtarıyla çekiyor ama neyin nereye gittiğini göstermiyor. Bizde her bağlantı tek bir kapıdan geçer, yalnızca izinli sunuculara gider, satır satır kayda yazılır ve tek anahtarla kapanır (0.6.0). Taranan uygulamaların hiçbirinde bağlantı kaydı yok.
+2. **Tanı paketi ve uygulama içi kayıt.** Sorun çıktığında tek tıkla, sır içermeyen bir paket (F1). Rakiplerde ya ayrı bir araç ya da log klasörü var.
+3. **Geçiş hattının tamamı.** Güncelleme ve doğrulama kodu duraklarıyla (A2, A6) bir geçişin her anı tek yerde görünür.
+4. **İki kapılı kilit.** Ana şifre, Windows Hello ve şifre çıkışında yeniden sorma birlikte (E1, E2). Hextech Manager'da benzeri var, League Accounts'ta yok.
+5. **Oturum önce, şifre sonra, VALORANT dahil.** League'e özel yöneticilerin çoğu VALORANT'ı desteklemiyor; oturum değiştiricilerin çoğu da rank ve ban göstermiyor.
+6. **"Bitince geç" ve tek tuşla önceki hesap** (A15). Rakiplerde yok.
 
-| Kalan | Neyi bekliyor |
-|---|---|
-| A4 bölge denetimi | Farklı bölgelerden iki hesapla gerçek istemcide deneme |
-| A5 giriş sayfasını içeriden sürmek | 0.4.4'teki klavyesiz girişin gerçek logu |
-| B3 giriş yapmadan rank, duo filtresi | "İnternete bağlanmaz" sözünden vazgeçme kararı |
-| D1 arayüz testlerini Actions'a bağlamak | İş akışı dosyasını değiştirme izni olan bir oturum |
-| D3 erken sürüm kanalı, D4 sağlık denetimi | Kullanıcı sayısı artınca |
+## 5. Sürüm planı
 
-## 5. Bilerek alınmayanlar
+Sıra, neyin neye bağlı olduğuna göre kuruldu. 0.6.0 tek büyük yama olarak çıktı; sonrakiler onun getirdiği tanı paketinden gelecek bilgiye dayanıyor.
 
-- **Her girişte şifreyle girmek.** Onların ana yöntemi; bizim oturum yöntemimiz daha hızlı ve captcha'ya takılmıyor. Şifre bizde yedek yol olarak kalır.
-- **Şifreleri Credential Manager'a taşımak.** Aynı Windows kullanıcısına karşı DPAPI ile aynı korumayı verir, ana şifre katmanımızı ise desteklemez.
-- **Yalnızca sabit kodlu kayıt.** Bugün logu okuyarak üç sorunu bir bakışta ayırabildik; D2 ile aynı güvence okunabilirlik kaybetmeden sağlanır.
-- **Deceive uyumu, oyun dili ve bölgeye özel yamalar.** İsteyen olursa bakılır.
+| Sürüm | Ad | İçerik | Neden bu sırada |
+|---|---|---|---|
+| **0.6.0** | İnternet | B12, B1, B2 (kısmen), B8 (kısmen), B9, C1, F1, A1, internet kapısı ve bağlantı kaydı | Yayında |
+| 0.6.x | Düzeltmeler | OP.GG biçimi canlıda farklı çıkarsa uyarlama; tanı paketinden görülen farklar | Varsayımlar gerçek istemcide ve canlı sayfada ilk kez sınanıyor |
+| 0.7.0 | VALORANT ve künye | B13 VALORANT rankı, B2'nin kalanı, B3 TFT, B4, B7 | VALORANT için gerçek istemcinin ne döndürdüğünü tanı paketinden görmek gerek |
+| 0.7.1 | Düzen | C3 gruplar, C7 çöp, B6 duo filtresi, C6 yayıncı modu, A15, C2, C4 | Çok hesabı olanlar için |
+| 0.8.0 | Geçiş | A4 bölge, A7, A8, A9, A6 güncelleme durağı, A10 günlüklü değişim, A2 uygulama içi kod, F2, C10 | Girişe dokunan her şey bir arada |
+| 0.8.1 | Yardımcılar | A11 ayar taşıma, A12 hızlı geçiş paleti, H1, H2 | |
+| 0.9.0 | Kasa ve filo | E1 Windows Hello, E2, E3, E4, E6, F4, D1 ile D5, B5, B10, B11 | Windows'a özel işler senin makinende deneme ister |
+| 1.0.0 | Sağlamlık | F6, F7, F8, C5 İngilizce | Başkalarına açmadan önce |
 
-## 6. Açık sorular
+Hiçbir sürüme yazılmayanlar: A3, A13, F3.
 
-1. 0.4.4'te şifreli hesapla giriş logu: UI Automation kabul edildi mi? (A5'in kaderi)
-2. Farklı bölgelerde hesabın var mı, geçişte sunucu doğru mu? (A4)
-3. OP.GG'den rank isteniyor mu, yoksa "internete bağlanmaz" sözü daha mı değerli? (B3)
-4. Arkadaşın 0.4.5 ile içe aktarmayı denedi mi, dosya sorunsuz okundu mu?
+## 6. Verilen kararlar
+
+1. **İnternet: evet.** Uygulama internete bağlanıp hesapların güncel halini gösterir. Karşılığında güvenlik hissi güçlendirildi: onay sorusu, izinli sunucu listesi, bağlantı kaydı, ana anahtar ([SECURITY.md](../SECURITY.md)). B12 yapıldı, B13 sırada.
+2. **Kilit: zorlaştırılmayacak** (E5). Uygulamanın amacı rahat ve hızlı giriş; kilit kapalıyken şifre çıkışı bugünkü gibi uyarıyla serbest kalır.
+3. **Oyun içi yardımcılar: alınmıyor** (G1, A14). Amaç dışı.
+4. **Kod imzalama: beklemede** (E7). Ücretli olduğu için şimdilik yok.
+
+## 7. Bilerek alınmayanlar
+
+- **Her girişte şifreyle girmek** (League Accounts'un ana yolu): oturum yöntemimiz daha hızlı ve captcha'ya takılmıyor.
+- **Yönetici olarak çalışmak** (Hextech Manager zorunlu tutuyor): gerekmiyor, saldırı yüzeyini büyütür.
+- **Şifreleri Credential Manager'a taşımak:** ana şifre katmanımızı desteklemez.
+- **Riot'un görselleri ve yazı tipleri** (League Accounts paketliyor): kendi çizimlerimizle devam.
+- **macOS ve Linux** (accshift): Riot Client'ın ve League'in olduğu yer Windows.
+- **Bildirim temizleme, arkadaş listesi, sohbet** (G2, G3).
+- **Kendiliğinden maç kabulü ve çevrimdışı görünme** (G1, A14): hesap değiştirmenin dışında.
+- **Tarayıcı taklidi yaparak veri çekmek:** uygulama internette kendini adıyla tanıtır; bir site bunu reddederse o veri gösterilmez.

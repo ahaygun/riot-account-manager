@@ -462,6 +462,11 @@ mod win {
         fn set(field: &IUIAutomationElement, text: &str) -> windows::core::Result<()> {
             // SAFETY: as above; the string outlives the call.
             unsafe {
+                // Focus first: the page then treats the value as typed into
+                // the field it belongs to. It moves the focus inside the
+                // page only; the window is not brought forward. A refusal
+                // is no reason not to set the value.
+                let _ = field.SetFocus();
                 let value: IUIAutomationValuePattern = field.GetCurrentPatternAs(UIA_ValuePatternId)?;
                 value.SetValue(&BSTR::from(text))
             }

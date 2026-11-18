@@ -1,5 +1,8 @@
 //! The switching logic itself.
 
+mod diagnose;
+mod online;
+pub use online::Refreshed;
 mod portable;
 
 use crate::api::{AuthProblem, ClientApi, Identity, LoginState};
@@ -56,6 +59,10 @@ pub enum Error {
     BackupNotOpened,
     /// Nothing that could be exported.
     NothingToExport,
+    /// A Riot ID has to be a name, "#", and a tag.
+    BadRiotId,
+    /// Not a region the app knows.
+    BadRegion,
 }
 
 impl From<VaultError> for Error {
@@ -92,6 +99,8 @@ impl Error {
             Error::BadBackup => "bad_backup",
             Error::BackupNotOpened => "backup_not_opened",
             Error::NothingToExport => "nothing_to_export",
+            Error::BadRiotId => "bad_riot_id",
+            Error::BadRegion => "bad_region",
         }
     }
 }
@@ -133,6 +142,8 @@ impl fmt::Display for Error {
             Error::BadBackup => write!(f, "Bu dosya bir QuickSwitch yedeği değil."),
             Error::BackupNotOpened => write!(f, "Yedek açılamadı: parola yanlış ya da dosya bozulmuş."),
             Error::NothingToExport => write!(f, "Dışa aktarılacak hesap yok."),
+            Error::BadRiotId => write!(f, "Riot ID, ad ve etiketten oluşur: Ad#ETİKET."),
+            Error::BadRegion => write!(f, "Bu bölge tanınmıyor."),
         }
     }
 }
@@ -173,6 +184,8 @@ pub struct Timing {
     pub game_start_wait: Duration,
     /// How long we keep watching for the user to sign in by hand.
     pub manual_wait: Duration,
+    /// Pause between two requests to the same site, out of politeness.
+    pub net_gap: Duration,
 }
 
 impl Default for Timing {
@@ -193,6 +206,7 @@ impl Default for Timing {
             submit_retry: Duration::from_secs(5),
             game_start_wait: Duration::from_secs(15),
             manual_wait: Duration::from_secs(600),
+            net_gap: Duration::from_millis(1500),
         }
     }
 }
@@ -233,6 +247,8 @@ pub struct View {
     pub unsaved_session: bool,
     pub in_game: bool,
     pub security: SecurityView,
+    /// What the app may use the internet for.
+    pub net: crate::net::NetSettings,
 }
 
 /// What the security screen reports. Counts only, never content.
@@ -329,6 +345,9 @@ pub struct Switcher {
     pub ask_for_focus: Arc<dyn Fn(bool) + Send + Sync>,
     /// The time in Unix seconds. Tests move it to age a session.
     pub clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+    /// The only way to the internet (see `net.rs`). Until the app layer
+    /// gives it a transport, it reaches nothing.
+    pub net: crate::net::Gate,
     /// Told what a switch is doing, as it moves along, and for which
     /// account: "closing", "restoring", "starting", "waiting",
     /// "signing_in", "verifying", "game".
@@ -343,6 +362,7 @@ pub struct Switcher {
     seen_signed_in: Mutex<bool>,
     /// See `typing_for()`.
     typing_for: Mutex<Option<String>>,
+    online: online::State,
 }
 
 /// Marks an account as being typed in for as long as it lives.
@@ -367,6 +387,7 @@ type IdleStamp = (u64, Option<(u64, SystemTime)>);
 impl Switcher {
     pub fn new(env: Env, procs: Arc<dyn Procs>, api: Arc<dyn ClientApi>, typer: Arc<dyn LoginTyper>) -> Self {
         let vault = Vault::new(env.data_dir.join("vault.json"));
+        let ledger = env.data_dir.join("network.log");
         let switcher = Switcher {
             env,
             procs,
@@ -377,6 +398,8 @@ impl Switcher {
             ask_for_focus: Arc::new(|_| {}),
             clock: Arc::new(system_now),
             on_step: Arc::new(|_, _| {}),
+            net: crate::net::Gate::new(Box::new(crate::net::NoTransport), ledger),
+            online: online::State::default(),
             vault,
             state_lock: Mutex::new(()),
             idle_seen: Mutex::new(None),
@@ -548,6 +571,7 @@ impl Switcher {
             },
             unsaved_session: live.has_session() && active.is_none(),
             in_game: any(&cfg.game_processes),
+            net: cfg.net,
             client: ClientView {
                 running: live.running,
                 login,
@@ -1179,7 +1203,19 @@ impl Switcher {
             acc.riot_id = info.riot_id.or(acc.riot_id.take());
             acc.level = info.level.or(acc.level);
             acc.rank = info.rank; // unranked is information too
+            acc.icon = info.icon.or(acc.icon);
+            acc.region = info.region.or(acc.region.take());
+            acc.lookup_problem = None;
             acc.needs_login = false;
+            let news = *acc != before;
+            // The client is the account itself speaking: nothing is fresher.
+            // The time of its word is kept current, but not written down
+            // more than once a minute when nothing else has changed.
+            let now = self.now();
+            if news || before.rank_from.as_deref() != Some("client") || now.saturating_sub(before.rank_at) >= 60 {
+                acc.rank_at = now;
+                acc.rank_from = Some("client".into());
+            }
             *acc != before
         })
     }
