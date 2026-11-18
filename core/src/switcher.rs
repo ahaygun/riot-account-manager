@@ -134,6 +134,10 @@ pub struct Timing {
     pub ui_load: Duration,
     /// How long a typed login may take to go through.
     pub login_wait: Duration,
+    /// If a typed login shows no sign of going through for this long, Enter
+    /// is pressed once more: the first one can land before the page is
+    /// ready to take it.
+    pub submit_retry: Duration,
     /// After a typed login, how long to wait for the game before asking the
     /// client to start it.
     pub game_start_wait: Duration,
@@ -144,7 +148,10 @@ pub struct Timing {
 impl Default for Timing {
     fn default() -> Self {
         Timing {
-            quit_timeout: Duration::from_secs(8),
+            // A client that is stopped instead of quitting does not write
+            // its renewed session, and the copy we keep goes stale. Quitting
+            // has been seen to take more than eight seconds.
+            quit_timeout: Duration::from_secs(20),
             settle: Duration::from_millis(250),
             // Asking the client is a request to 127.0.0.1; a short wait
             // means a sign-in is noticed, and acted on, without delay.
@@ -153,6 +160,7 @@ impl Default for Timing {
             signed_out_grace: Duration::from_secs(8),
             ui_load: Duration::from_secs(3),
             login_wait: Duration::from_secs(90),
+            submit_retry: Duration::from_secs(5),
             game_start_wait: Duration::from_secs(15),
             manual_wait: Duration::from_secs(600),
         }
@@ -289,6 +297,24 @@ pub struct Switcher {
     idle_seen: Mutex<Option<IdleStamp>>,
     /// The client was signed in the last time `observe_live` looked.
     seen_signed_in: Mutex<bool>,
+    /// See `typing_for()`.
+    typing_for: Mutex<Option<String>>,
+}
+
+/// Marks an account as being typed in for as long as it lives.
+struct Typing<'a>(&'a Mutex<Option<String>>);
+
+impl<'a> Typing<'a> {
+    fn start(slot: &'a Mutex<Option<String>>, id: &str) -> Self {
+        *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(id.to_string());
+        Typing(slot)
+    }
+}
+
+impl Drop for Typing<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 /// (session files, account list): see `Switcher::idle_stamp`.
@@ -310,6 +336,7 @@ impl Switcher {
             state_lock: Mutex::new(()),
             idle_seen: Mutex::new(None),
             seen_signed_in: Mutex::new(false),
+            typing_for: Mutex::new(None),
         };
         switcher.finish_relock();
         switcher
@@ -551,6 +578,10 @@ impl Switcher {
             while start.elapsed() < self.timing.quit_timeout && !self.procs.running(names).is_empty() {
                 std::thread::sleep(self.timing.poll.min(Duration::from_millis(100)));
             }
+        }
+        let left = self.procs.running(names);
+        if !left.is_empty() {
+            self.log(&format!("switch: the client did not quit by itself and was stopped ({}); its session may not have been renewed on disk", left.join(", ")));
         }
         if !self.procs.kill_and_wait(names, Duration::from_secs(3).min(self.timing.quit_timeout)) {
             return Err(Error::StillRunning(self.procs.running(names)));
@@ -830,12 +861,11 @@ impl Switcher {
         let cfg = self.config()?;
         let t = &self.timing;
 
-        // The grace period exists because a starting client says "signed
-        // out" until it has loaded the session on disk. With no session on
-        // disk (an account that signs in by password) there is nothing to
-        // load, so a quarter of it is kept, only to let the client settle.
-        let nothing_to_load = !identity::read_file_session(&self.env.riot_games_dir).has_tokens;
-        let grace = if nothing_to_load { t.signed_out_grace / 4 } else { t.signed_out_grace };
+        // The grace period is kept in full even when there is no session on
+        // disk to load: it is also the time the login page needs before it
+        // takes a typed sign-in. A shorter one typed into a page that was
+        // not ready, and the sign-in went nowhere.
+        let grace = t.signed_out_grace;
 
         // 1. Wait for the client to answer at all.
         let start = Instant::now();
@@ -906,14 +936,26 @@ impl Switcher {
             cancelled,
             log: &log,
         };
-        if let Err(why) = self.typer.type_login(&creds.username, &creds.password, &target) {
+        let typed = {
+            let _typing = Typing::start(&self.typing_for, id);
+            self.typer.type_login(&creds.username, &creds.password, &target)
+        };
+        if let Err(why) = typed {
             self.set_needs_login(id, true)?;
             return Ok(LoginOutcome::NeedsLogin(why));
         }
         let typed_at = Instant::now();
+        let mut pressed_again = false;
         while typed_at.elapsed() < t.login_wait {
             if cancelled() {
                 return Ok(LoginOutcome::Unknown);
+            }
+            // Still plainly signed out a while after Enter: it may not have
+            // been taken. Once more, and only once, so a wrong password is
+            // not sent over and over.
+            if !pressed_again && typed_at.elapsed() >= t.submit_retry && self.api.login() == LoginState::SignedOut {
+                pressed_again = true;
+                self.typer.submit_again(&target);
             }
             if matches!(self.api.login(), LoginState::SignedIn { .. }) {
                 self.log(&format!(
@@ -929,6 +971,12 @@ impl Switcher {
         Ok(LoginOutcome::NeedsLogin(
             "Otomatik giriş tamamlanmadı: şifre yanlış olabilir ya da Riot doğrulama kodu istiyor.".into(),
         ))
+    }
+
+    /// The account whose sign-in is being typed right now, if any. While
+    /// that lasts, starting the same switch again would only cut it short.
+    pub fn typing_for(&self) -> Option<String> {
+        self.typing_for.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// After `await_login` reported `NeedsLogin`: keeps watching for the

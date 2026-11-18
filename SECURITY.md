@@ -35,7 +35,8 @@ Her şey `%LOCALAPPDATA%\QuickSwitch\` içinde durur. `Roaming` yerine `Local` s
 
 - Şifre kaydetmek isteğe bağlıdır. Önerilen yol oturumla eklemektir; o yolda şifre hiç saklanmaz.
 - Kaydedilen şifre arayüze geri gönderilmez ve gösterilmez.
-- Şifre, Riot Client'ın giriş penceresine klavye girişi olarak yazılır. Yazmadan önce ve her adımda öndeki pencerenin, adı eşleşen **ve** çalıştırılabilir dosyası Riot Client kurulum klasöründe olan bir sürece ait olduğu denetlenir. Değilse yazma durur.
+- Şifre önce Riot Client penceresindeki giriş alanına doğrudan (Windows UI Automation ile) yazılır. Pencere, adı eşleşen **ve** çalıştırılabilir dosyası Riot Client kurulum klasöründe olan bir sürece aittir; alanların da o süreçlere ait olduğu ayrıca denetlenir. Bu yolda klavye kullanılmaz, yani şifre başka bir pencereye gidemez.
+- Sayfa bunu kabul etmezse alanlar boşaltılır ve şifre klavye girişi olarak yazılır. Yazmadan önce ve her adımda öndeki pencerenin aynı koşulları sağlayan bir sürece ait olduğu denetlenir. Değilse yazma durur.
 - Şifre komut satırına, günlük dosyasına ya da panoya yazılmaz; bellekteki kopyası iş bitince silinir.
 
 ## Diğer önlemler

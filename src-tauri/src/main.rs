@@ -152,6 +152,13 @@ fn notice(app: &AppHandle, text: impl Into<String>, error: bool) {
 fn do_switch(app: &AppHandle, target: &str, game: Option<Game>, force: bool) -> CmdResult<String> {
     touch(app);
     let shared = app.state::<Shared>();
+    // A second click on an account whose password is being typed right now
+    // would cancel the typing and start over; it is let through instead.
+    if !force && shared.sw.typing_for().as_deref() == Some(target) {
+        if let Some(name) = shared.sw.account_name(target) {
+            return Ok(name);
+        }
+    }
     let (result, generation) = {
         let _ops = lock(&shared.ops);
         let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;

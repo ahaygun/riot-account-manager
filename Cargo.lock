@@ -3185,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "quickswitch"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "quickswitch-core",
  "serde",
@@ -3200,7 +3200,7 @@ dependencies = [
 
 [[package]]
 name = "quickswitch-core"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -3208,6 +3208,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sysinfo",
+ "windows",
  "zeroize",
 ]
 

@@ -29,6 +29,11 @@ struct Sim {
     accepts: Option<(String, String)>,
     typed: Vec<(String, String)>,
     typer_error: Option<String>,
+    /// The login page takes the text but not the first Enter.
+    first_enter_lost: bool,
+    /// The typed sign-in ticks "stay signed in", as the real one tries to.
+    typed_stays_signed_in: bool,
+    enters_again: u32,
     league: Option<LeagueInfo>,
     /// The local API says "stay signed in" is off although it is on.
     misreport_persist: bool,
@@ -171,13 +176,32 @@ impl LoginTyper for World {
             return Err(e);
         }
         s.typed.push((username.into(), password.into()));
-        if let Some((good, puuid)) = s.accepts.clone() {
-            if good == password {
-                s.signed_in = Some((puuid, "typed-session".into()));
-                s.persist = Some(false);
-            }
+        if !s.first_enter_lost {
+            s.submit();
         }
         Ok(())
+    }
+
+    fn submit_again(&self, _target: &UiTarget) -> bool {
+        let mut s = self.sim();
+        s.enters_again += 1;
+        s.submit();
+        true
+    }
+}
+
+impl Sim {
+    /// Enter on the login page: signs in if the last typed password is right.
+    fn submit(&mut self) {
+        let Some((_, password)) = self.typed.last().cloned() else { return };
+        if let Some((good, puuid)) = self.accepts.clone() {
+            if good == password {
+                // Named so that `boot` reads the same account back from it.
+                let token = format!("{}-typed", puuid.trim_start_matches("puuid-"));
+                self.signed_in = Some((puuid, token));
+                self.persist = Some(self.typed_stays_signed_in);
+            }
+        }
     }
 }
 
@@ -220,6 +244,7 @@ fn switcher(env: Env, w: &Arc<World>) -> Switcher {
         signed_out_grace: ms(30),
         ui_load: ms(5),
         login_wait: ms(150),
+        submit_retry: ms(60),
         game_start_wait: ms(30),
         manual_wait: ms(300),
     };
@@ -468,17 +493,67 @@ fn password_only_account_starts_signed_out_and_types() {
 }
 
 #[test]
-fn password_only_account_does_not_wait_out_the_session_grace() {
-    let mut f = fixture("pw-fast");
-    // Long enough that waiting it out in full would be plain to see.
-    f.sw.timing.signed_out_grace = Duration::from_secs(2);
+fn a_password_only_account_waits_the_grace_out_before_typing() {
+    let mut f = fixture("pw-grace");
+    f.sw.timing.signed_out_grace = Duration::from_millis(600);
     f.w.sim().accepts = Some(("hunter2".into(), "puuid-P".into()));
     let acc = f.sw.add_with_credentials("Şifreli", "user", "hunter2", Game::Lol).unwrap();
     f.sw.switch(&acc.id, None).unwrap();
     let started = std::time::Instant::now();
     assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
-    assert!(started.elapsed() < Duration::from_millis(1500), "typed after a quarter of the grace: {:?}", started.elapsed());
+    assert!(started.elapsed() >= Duration::from_millis(600), "the page gets its time: {:?}", started.elapsed());
+    assert_eq!(f.w.sim().enters_again, 0, "a sign-in that goes through is left alone");
+}
+
+#[test]
+fn an_enter_the_page_did_not_take_is_pressed_once_more() {
+    let f = fixture("enter-again");
+    {
+        let mut s = f.w.sim();
+        s.accepts = Some(("hunter2".into(), "puuid-P".into()));
+        s.first_enter_lost = true;
+    }
+    let acc = f.sw.add_with_credentials("Şifreli", "user", "hunter2", Game::Lol).unwrap();
+    f.sw.switch(&acc.id, None).unwrap();
+    assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
+    let s = f.w.sim();
+    assert_eq!((s.typed.len(), s.enters_again), (1, 1), "typed once, Enter twice");
+}
+
+#[test]
+fn a_typed_sign_in_that_stays_signed_in_is_typed_only_once() {
+    let f = fixture("typed-once");
+    two_accounts(&f);
+    {
+        let mut s = f.w.sim();
+        s.accepts = Some(("hunter2".into(), "puuid-P".into()));
+        s.typed_stays_signed_in = true;
+    }
+    let acc = f.sw.add_with_credentials("Şifreli", "user", "hunter2", Game::Lol).unwrap();
+    f.sw.switch(&acc.id, None).unwrap();
+    assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
     assert_eq!(f.w.sim().typed.len(), 1);
+
+    // Away and back: the session the typed sign-in left behind is used.
+    f.sw.switch("ana-hesap", None).unwrap();
+    assert_eq!(f.sw.await_login("ana-hesap", None, &never).unwrap(), LoginOutcome::SignedIn);
+    let v = f.sw.view().unwrap();
+    assert!(v.accounts.iter().find(|a| a.account.id == acc.id).unwrap().has_session, "kept when the client closed");
+    f.sw.switch(&acc.id, None).unwrap();
+    assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
+    assert_eq!(f.w.sim().typed.len(), 1, "no password the second time");
+    assert_eq!(f.w.sim().signed_in.as_ref().unwrap().0, "puuid-P");
+}
+
+#[test]
+fn a_wrong_password_is_sent_twice_at_most() {
+    let f = fixture("enter-wrong");
+    f.w.sim().accepts = Some(("the-right-one".into(), "puuid-P".into()));
+    let acc = f.sw.add_with_credentials("Şifreli", "user", "wrong", Game::Lol).unwrap();
+    f.sw.switch(&acc.id, None).unwrap();
+    assert!(matches!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::NeedsLogin(_)));
+    let s = f.w.sim();
+    assert_eq!((s.typed.len(), s.enters_again), (1, 1));
 }
 
 #[test]

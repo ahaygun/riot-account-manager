@@ -1,9 +1,17 @@
-//! Types a username and password into Riot Client's login window. This is
-//! the fallback for when a saved session has expired.
+//! Signs in through Riot Client's login window with a stored username and
+//! password. This is the fallback for when a saved session has expired.
 //!
-//! Keystrokes go to whatever has the keyboard focus, so the rule is: before
-//! every batch, the foreground window must belong to a Riot Client UI
-//! process, or nothing more is typed.
+//! Two ways, tried in this order:
+//!
+//! 1. UI Automation: the fields and the button are found in the window's
+//!    accessibility tree and filled and pressed there. Nothing goes through
+//!    the keyboard, so the window does not have to be in front and the user
+//!    can keep working elsewhere. "Stay signed in" is ticked on the way, so
+//!    the next sign-in to this account needs no password at all.
+//! 2. Keystrokes, when the page does not take the first way. They go to
+//!    whatever has the keyboard focus, so the rule is: before every batch,
+//!    the foreground window must belong to a Riot Client UI process, or
+//!    nothing more is typed.
 //!
 //! A process counts as Riot Client only if its name matches and its
 //! executable sits inside Riot Client's install folder. The name alone is
@@ -29,6 +37,12 @@ pub struct UiTarget<'a> {
 
 pub trait LoginTyper: Send + Sync {
     fn type_login(&self, username: &str, password: &str, target: &UiTarget) -> Result<(), String>;
+
+    /// Presses Enter once more on a login that was typed but does not seem
+    /// to have been sent. Types nothing else. Returns whether it pressed.
+    fn submit_again(&self, _target: &UiTarget) -> bool {
+        false
+    }
 }
 
 /// `exe` is inside `dir` (case-insensitive, as Windows paths are).
@@ -54,6 +68,10 @@ impl LoginTyper for WindowTyper {
 impl LoginTyper for WindowTyper {
     fn type_login(&self, username: &str, password: &str, target: &UiTarget) -> Result<(), String> {
         win::type_login(username, password, target)
+    }
+
+    fn submit_again(&self, target: &UiTarget) -> bool {
+        win::submit_again(target)
     }
 }
 
@@ -338,12 +356,239 @@ mod win {
         send(&[key(vk, 0, 0), key(vk, 0, KEYEVENTF_KEYUP)]);
     }
 
+    /// Where a window is on the screen, as four numbers that can be compared.
+    fn place(hwnd: Hwnd) -> (i32, i32, i32, i32) {
+        let mut r = Rect::default();
+        // SAFETY: `r` is a valid RECT; a stale handle leaves it zeroed.
+        unsafe { GetWindowRect(hwnd, &mut r) };
+        (r.left, r.top, r.right, r.bottom)
+    }
+
+    /// Riot Client opens with a small window and replaces it with the real
+    /// one; typing during that change goes nowhere. Waits until the same
+    /// window has kept the same place for two seconds, for at most twenty,
+    /// and returns it.
+    fn wait_for_steady_window(target: &UiTarget) -> Option<Hwnd> {
+        let start = std::time::Instant::now();
+        let mut seen: Option<(Hwnd, (i32, i32, i32, i32))> = None;
+        let mut since = std::time::Instant::now();
+        let quiet = UiTarget { processes: target.processes, install_dir: target.install_dir, ask_for_focus: target.ask_for_focus, cancelled: target.cancelled, log: &|_| {} };
+        while start.elapsed() < Duration::from_secs(20) && !(target.cancelled)() {
+            let now = find_window(&quiet).map(|h| (h, place(h)));
+            if now != seen {
+                seen = now;
+                since = std::time::Instant::now();
+            } else if seen.is_some() && since.elapsed() >= Duration::from_secs(2) {
+                (target.log)(&format!("login: window steady after {} ms", start.elapsed().as_millis()));
+                break;
+            }
+            sleep(Duration::from_millis(250));
+        }
+        // Looked up once more, this time with its diagnostics.
+        find_window(target)
+    }
+
+    /// The login page, reached through UI Automation instead of the keyboard.
+    mod uia {
+        use std::thread::sleep;
+        use std::time::{Duration, Instant};
+        use windows::core::BSTR;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+        use windows::Win32::System::Variant::VARIANT;
+        use windows::Win32::UI::Accessibility::{
+            CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern, IUIAutomationTogglePattern, IUIAutomationValuePattern,
+            ToggleState_On, TreeScope_Descendants, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_ControlTypePropertyId, UIA_EditControlTypeId,
+            UIA_InvokePatternId, UIA_TogglePatternId, UIA_ValuePatternId, UIA_CONTROLTYPE_ID,
+        };
+
+        /// How the attempt ended.
+        pub enum Outcome {
+            /// Filled in and the sign-in button pressed.
+            Submitted,
+            /// The page did not take it. The fields are as they were found
+            /// (empty) and the username field has the focus, ready for keys.
+            NotTaken,
+        }
+
+        /// Balances CoInitializeEx on this thread.
+        struct Com(bool);
+
+        impl Drop for Com {
+            fn drop(&mut self) {
+                if self.0 {
+                    // SAFETY: pairs with the successful CoInitializeEx below.
+                    unsafe { CoUninitialize() };
+                }
+            }
+        }
+
+        struct Page {
+            automation: IUIAutomation,
+            root: IUIAutomationElement,
+        }
+
+        impl Page {
+            fn all(&self, kind: UIA_CONTROLTYPE_ID) -> windows::core::Result<Vec<IUIAutomationElement>> {
+                // SAFETY (whole block): COM calls on live interface pointers;
+                // every failure comes back as an error value.
+                unsafe {
+                    let condition = self.automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &VARIANT::from(kind.0))?;
+                    let found = self.root.FindAll(TreeScope_Descendants, &condition)?;
+                    (0..found.Length()?).map(|i| found.GetElement(i)).collect()
+                }
+            }
+
+            /// Which buttons can be pressed right now, in page order.
+            fn buttons(&self) -> windows::core::Result<Vec<(IUIAutomationElement, bool)>> {
+                self.all(UIA_ButtonControlTypeId)?
+                    .into_iter()
+                    // SAFETY: as above.
+                    .map(|b| unsafe { b.CurrentIsEnabled() }.map(|on| (b, on.as_bool())))
+                    .collect()
+            }
+
+            /// The username and password fields, once the page shows both.
+            fn fields(&self) -> Option<(IUIAutomationElement, IUIAutomationElement)> {
+                let edits = self.all(UIA_EditControlTypeId).ok()?;
+                // SAFETY: as above.
+                let is_password = |e: &IUIAutomationElement| unsafe { e.CurrentIsPassword() }.map(|b| b.as_bool()).unwrap_or(false);
+                let user = edits.iter().find(|e| !is_password(e))?.clone();
+                let pass = edits.iter().find(|e| is_password(e))?.clone();
+                Some((user, pass))
+            }
+        }
+
+        fn set(field: &IUIAutomationElement, text: &str) -> windows::core::Result<()> {
+            // SAFETY: as above; the string outlives the call.
+            unsafe {
+                let value: IUIAutomationValuePattern = field.GetCurrentPatternAs(UIA_ValuePatternId)?;
+                value.SetValue(&BSTR::from(text))
+            }
+        }
+
+        /// Fills in the login page of the window `hwnd` and presses its
+        /// sign-in button. `pids` are the Riot Client UI processes: a field
+        /// that belongs to any other process is never written to.
+        ///
+        /// The sign-in button is not looked for by its name, which changes
+        /// with the language: it is the one button that cannot be pressed
+        /// while the fields are empty and can be once they are filled. If
+        /// no button behaves like that, the page did not take the text; the
+        /// fields are emptied again and the caller types instead.
+        pub fn sign_in(hwnd: *mut std::ffi::c_void, pids: &[u32], username: &str, password: &str, log: &dyn Fn(&str), cancelled: &dyn Fn() -> bool) -> Result<Outcome, String> {
+            let fail = |what: &str, e: windows::core::Error| format!("{what}: {:#x}", e.code().0);
+            // SAFETY: plain COM start-up for this thread; undone by `Com`.
+            let _com = Com(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok());
+            // SAFETY: as above.
+            let automation: IUIAutomation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.map_err(|e| fail("no automation", e))?;
+            // SAFETY: as above; a stale handle is an error value.
+            let root = unsafe { automation.ElementFromHandle(HWND(hwnd)) }.map_err(|e| fail("no window element", e))?;
+            let page = Page { automation, root };
+
+            // The page builds its accessibility tree only once somebody
+            // asks for it, so the first looks come back empty.
+            let start = Instant::now();
+            let (user, pass) = loop {
+                if let Some(found) = page.fields() {
+                    break found;
+                }
+                if cancelled() || start.elapsed() > Duration::from_secs(12) {
+                    return Err("login fields not found".into());
+                }
+                sleep(Duration::from_millis(400));
+            };
+            for field in [&user, &pass] {
+                // SAFETY: as above.
+                let pid = unsafe { field.CurrentProcessId() }.map_err(|e| fail("no owner", e))?;
+                if !pids.contains(&(pid as u32)) {
+                    return Err("a login field belongs to another process".into());
+                }
+            }
+            let before = page.buttons().map_err(|e| fail("no buttons", e))?;
+            log(&format!("login: page found after {} ms ({} buttons)", start.elapsed().as_millis(), before.len()));
+
+            // From here on the page is being changed; `undo` puts it back.
+            let undo = |why: String| {
+                let _ = set(&user, "");
+                let _ = set(&pass, "");
+                // SAFETY: as above.
+                let _ = unsafe { user.SetFocus() };
+                log(&format!("login: the page did not take the automated sign-in ({why})"));
+                Ok(Outcome::NotTaken)
+            };
+            if let Err(e) = set(&user, username).and_then(|_| set(&pass, password)) {
+                return undo(fail("fields refused", e));
+            }
+
+            // "Stay signed in", when the page has exactly one checkbox: with
+            // it, Riot Client keeps the session and the next switch to this
+            // account needs no password.
+            match page.all(UIA_CheckBoxControlTypeId).unwrap_or_default().as_slice() {
+                [stay] => {
+                    // SAFETY: as above.
+                    let ticked = unsafe {
+                        stay.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId).and_then(|t| {
+                            if t.CurrentToggleState()? == ToggleState_On {
+                                Ok(())
+                            } else {
+                                t.Toggle()
+                            }
+                        })
+                    };
+                    log(if ticked.is_ok() { "login: stay signed in is ticked" } else { "login: could not tick stay signed in" });
+                }
+                other => log(&format!("login: {} checkboxes on the page; stay signed in left alone", other.len())),
+            }
+
+            // The button that woke up when the fields were filled.
+            sleep(Duration::from_millis(500));
+            let after = match page.buttons() {
+                Ok(after) => after,
+                Err(e) => return undo(fail("no buttons", e)),
+            };
+            let woke: Vec<&IUIAutomationElement> = if after.len() == before.len() {
+                before.iter().zip(&after).filter(|((_, was), (_, is))| !*was && *is).map(|(_, (b, _))| b).collect()
+            } else {
+                Vec::new()
+            };
+            let [submit] = woke.as_slice() else {
+                let on = |list: &[(IUIAutomationElement, bool)]| list.iter().filter(|(_, on)| *on).count();
+                return undo(format!("buttons enabled {}/{} before, {}/{} after", on(&before), before.len(), on(&after), after.len()));
+            };
+            // SAFETY: as above.
+            match unsafe { submit.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId).and_then(|b| b.Invoke()) } {
+                Ok(()) => Ok(Outcome::Submitted),
+                Err(e) => undo(fail("button refused", e)),
+            }
+        }
+    }
+
+    pub fn submit_again(target: &UiTarget) -> bool {
+        if !foreground_is_riot(target) {
+            (target.log)(&format!("login: not pressing Enter again; foreground is {}", process_name(foreground_pid())));
+            return false;
+        }
+        press(VK_RETURN);
+        (target.log)("login: no sign of the sign-in going through; pressed Enter again");
+        true
+    }
+
     pub fn type_login(username: &str, password: &str, target: &UiTarget) -> Result<(), String> {
         let lost = || {
             (target.log)(&format!("login: lost the window while typing; foreground is {}", process_name(foreground_pid())));
             "Riot Client penceresi yazarken öne çıkmadı; şifrenin başka bir yere gitmemesi için yazma durduruldu.".to_string()
         };
-        let hwnd = find_window(target).ok_or("Riot Client penceresi bulunamadı.")?;
+        let hwnd = wait_for_steady_window(target).ok_or("Riot Client penceresi bulunamadı.")?;
+        // First without the keyboard: that works behind other windows.
+        match uia::sign_in(hwnd, &ui_pids(target), username, password, target.log, target.cancelled) {
+            Ok(uia::Outcome::Submitted) => {
+                (target.log)("login: signed in through the page, without the keyboard");
+                return Ok(());
+            }
+            Ok(uia::Outcome::NotTaken) => {}
+            Err(why) => (target.log)(&format!("login: automated sign-in not possible ({why}); typing instead")),
+        }
         if !focus(hwnd, target) && !wait_for_click(target) {
             return Err("Riot Client penceresi öne getirilemedi; şifre yazılmadı. Riot Client'ta elle giriş yapabilirsin.".into());
         }

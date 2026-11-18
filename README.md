@@ -65,7 +65,11 @@ Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 
 ## Otomatik giriş hakkında
 
-Şifre, Riot Client'ın giriş penceresine klavye girişi olarak yazılır. Her adımdan önce öndeki pencerenin Riot Client olduğu denetlenir; değilse yazma durur. Doğrulama kodu (2FA) ya da captcha çıkarsa onu senin tamamlaman gerekir. Bu yolla açılan oturum "Oturumu açık tut" işaretlenmeden açıldığı için saklanmaz; o hesap her geçişte şifreyle girer.
+Önce klavyesiz yol denenir: giriş alanları ve giriş düğmesi Riot Client penceresinin içinde bulunur, doldurulur ve düğmeye basılır. Pencerenin önde olması gerekmez; sen başka bir işle uğraşmaya devam edebilirsin. Bu sırada "Oturumu açık tut" da işaretlenir, böylece hesap bir kez şifreyle girer, sonraki geçişler kayıtlı oturumla olur.
+
+Sayfa bu yolu kabul etmezse şifre klavye girişi olarak yazılır. O zaman pencerenin önde olması gerekir: her adımdan önce öndeki pencerenin Riot Client olduğu denetlenir, değilse yazma durur. Bu yolla açılan oturum saklanmaz.
+
+Doğrulama kodu (2FA) ya da captcha çıkarsa onu senin tamamlaman gerekir.
 
 ## Güvenlik
 

@@ -1,6 +1,6 @@
 [package]
 name = "quickswitch-core"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 
 [dependencies]
@@ -13,3 +13,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
+
+# Fills Riot Client's login page through UI Automation, which does not need
+# the window to be in front.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Accessibility"] }
