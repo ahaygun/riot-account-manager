@@ -1239,7 +1239,10 @@ fn each_reason_a_typed_sign_in_fails_is_told_apart() {
         (AuthProblem::Captcha, "captcha"),
         (AuthProblem::Verification, "doğrulama kodu"),
     ] {
-        let f = fixture(&format!("auth-{problem:?}"));
+        let mut f = fixture(&format!("auth-{problem:?}"));
+        // A long wait, so "at once" is told from "when it ran out" by a wide
+        // margin: short sleeps last about 15 ms each on Windows.
+        f.sw.timing.login_wait = Duration::from_secs(5);
         {
             let mut s = f.w.sim();
             s.accepts = Some(("right".into(), "puuid-P".into()));
@@ -1250,7 +1253,7 @@ fn each_reason_a_typed_sign_in_fails_is_told_apart() {
         let started = std::time::Instant::now();
         let outcome = f.sw.await_login(&acc.id, None, &never).unwrap();
         assert!(matches!(&outcome, LoginOutcome::NeedsLogin(why) if why.contains(words)), "{problem:?}: {outcome:?}");
-        assert!(started.elapsed() < Duration::from_millis(140), "said at once, not after the wait runs out");
+        assert!(started.elapsed() < Duration::from_secs(2), "said at once, not after the wait runs out: {:?}", started.elapsed());
         assert_eq!(f.w.sim().enters_again, 0, "a refused sign-in is not sent again");
         assert!(f.sw.view().unwrap().accounts[0].account.needs_login);
     }
