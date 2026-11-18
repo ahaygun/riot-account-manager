@@ -4,10 +4,12 @@
    the action that makes an account live; red asks for a look. Corners are
    square and edges are hairlines, as in the client.
 
-   Nothing of Riot's is bundled: no artwork, no fonts, no sprites. The
-   display face is a serif Windows already has, the backdrop is a gradient,
-   every glyph is drawn below. The window still fetches nothing (see the
-   content security policy). Colour values follow the client's palette as
+   The rank emblems are Riot's own, bundled as the League client ships
+   them (ui/ranks, with a manifest of where each came from). Nothing else
+   of Riot's is here: no fonts, no backdrops, no sprites. The display face
+   is a serif Windows already has, the backdrop is a gradient, every other
+   glyph is drawn below. The window still fetches nothing (see the content
+   security policy). Colour values follow the client's palette as
    Tariolle/LeagueAccounts (MIT) documents it. Motion uses transform and
    opacity only, so it costs nothing while idle. */
 :root {
@@ -293,7 +295,7 @@ main { flex: 1; overflow-y: auto; padding: 0 14px 20px 24px; scrollbar-gutter: s
 
 /* ---- accounts ---- */
 #accounts { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
-#accounts.cards { grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); }
+#accounts.cards { grid-template-columns: repeat(auto-fill, minmax(264px, 1fr)); }
 #accounts.rows { gap: 8px; }
 
 /* A card's frame is two hairlines, a grey one and a dark one inside it,
@@ -313,7 +315,7 @@ main { flex: 1; overflow-y: auto; padding: 0 14px 20px 24px; scrollbar-gutter: s
 .account.active { border-color: transparent; border-image: linear-gradient(0deg, var(--mint-deep), var(--mint)) 1; box-shadow: inset 0 0 0 1px rgba(1, 10, 19, .6), inset 0 0 30px rgba(10, 200, 185, .07); }
 .account.active:hover { border-image: var(--teal-frame-lit) 1; }
 
-/* Tier colours, for the crest and the bar under the rank. */
+/* Tier colours, for the rank's name, the bar under it and the ring round the face. */
 .account[data-tier="iron"] { --tier: #7d7f8c; }
 .account[data-tier="bronze"] { --tier: #b0794f; }
 .account[data-tier="silver"] { --tier: #a9b4c8; }
@@ -339,21 +341,19 @@ main { flex: 1; overflow-y: auto; padding: 0 14px 20px 24px; scrollbar-gutter: s
 .account .go:active { transform: none; }
 .account .go:disabled { background: none; color: var(--paper); opacity: .6; }
 
-/* The crest: a plate in the tier's metal with the division inside; the
-   setting around it grows with the tier (see CRESTS in main.js). */
-.defs { position: absolute; }
-.crest { width: 68px; height: 68px; margin: -10px -8px -10px -10px; flex: none; color: var(--tier); overflow: visible; }
-.crest .plate { fill: color-mix(in srgb, var(--tier) 20%, var(--night)); stroke-width: 2.2; stroke-linejoin: round; }
-.crest .plate.none { fill: none; stroke: var(--edge); stroke-width: 1.5; }
-.crest .bevel { fill: none; stroke-width: .9; stroke-opacity: .55; stroke-linejoin: round; }
-.crest .blades { stroke: var(--night); stroke-width: .6; stroke-linejoin: round; }
-.crest .ring { fill: none; stroke-width: 1.1; }
-.crest .stone-cut { fill: none; stroke: var(--night); stroke-width: .7; stroke-opacity: .55; }
-.crest text { fill: var(--paper); font: 700 11.5px var(--display); font-variant-numeric: lining-nums; }
-/* From Diamond up the crest lights what is behind it. */
-.crest.glow { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--tier) 55%, transparent)); }
+/* The emblem. Riot's files are wide, mostly empty canvases with the emblem
+   small in the middle, and each tier drawn at its own size. The box shows
+   the middle of the canvas at one scale for every tier, so that Challenger
+   fills it and Iron sits small in it, as they do in the client. */
+.crest { --emblem: 92px; position: relative; flex: none; width: var(--emblem); height: calc(var(--emblem) * .78); overflow: hidden; }
+.crest img { position: absolute; left: 50%; top: 50%; width: 390%; max-width: none; height: auto; transform: translate(-50%, -47.5%); pointer-events: none; }
+/* The unranked emblem comes on a square canvas of its own, nearly filling it. */
+.crest[data-tier="unranked"] img { width: 88%; transform: translate(-50%, -50%); }
 
-.account .who { display: grid; gap: 2px; min-width: 0; }
+/* Who it is: the face, when there is one, and the name beside it. */
+.account .id { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+.account .who { flex: 1; display: grid; gap: 2px; min-width: 0; }
 .account .name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font: 700 17px/1.25 var(--display); letter-spacing: .025em; font-variant-numeric: lining-nums; }
 /* The name keeps its room; a tag that does not fit beside it goes below. */
 .account .name > span:first-child { flex: 0 1 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -362,9 +362,13 @@ main { flex: 1; overflow-y: auto; padding: 0 14px 20px 24px; scrollbar-gutter: s
 .account .sub .on { color: var(--mint); font-weight: 600; margin-right: 8px; }
 
 /* The rank, set as the client sets it: the tier in capitals, the points beside. */
-.account .rank { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
-.account .rank-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-family: var(--display); font-variant-numeric: lining-nums; text-transform: uppercase; }
-.account .rank-line b { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 700; font-size: 15px; letter-spacing: .05em; color: var(--tier); filter: brightness(1.15); white-space: nowrap; }
+/* The emblem on the left; beside it the tier, the points under it, then the bar. */
+.account .rank { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "crest line" "crest bar"; align-content: center; gap: 7px 12px; min-width: 0; }
+.account .rank:not(:has(.crest)) { grid-template-columns: minmax(0, 1fr); grid-template-areas: "line" "bar"; }
+.account .rank .crest { grid-area: crest; align-self: center; }
+.account .rank-line { grid-area: line; align-self: end; display: grid; gap: 2px; min-width: 0; font-family: var(--display); font-variant-numeric: lining-nums; text-transform: uppercase; }
+.account .lp { grid-area: bar; align-self: start; }
+.account .rank-line b { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 700; font-size: 14px; letter-spacing: .04em; color: var(--tier); filter: brightness(1.15); white-space: nowrap; }
 .account .rank-line span { flex: none; color: var(--mist); font-weight: 700; font-size: 12px; letter-spacing: .075em; white-space: nowrap; }
 .account .lp { height: 2px; background: rgba(60, 60, 65, .6); overflow: hidden; }
 .account .lp i { display: block; height: 100%; background: linear-gradient(90deg, var(--tier), color-mix(in srgb, var(--tier) 55%, var(--paper))); transform-origin: left; transform: scaleX(var(--lp, 0)); }
@@ -402,24 +406,24 @@ main { flex: 1; overflow-y: auto; padding: 0 14px 20px 24px; scrollbar-gutter: s
 
 /* Cards: a plate per account. */
 #accounts.cards .account { flex-direction: column; }
-#accounts.cards .go { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "crest who" "rank rank" "detail detail"; gap: 12px 12px; align-items: center; padding: 16px 16px 12px; }
-#accounts.cards .crest { grid-area: crest; }
-#accounts.cards .who { grid-area: who; }
-#accounts.cards .rank { grid-area: rank; }
-#accounts.cards .detail { grid-area: detail; min-height: 28px; padding-top: 10px; border-top: 1px solid rgba(200, 170, 110, .1); }
+#accounts.cards .go { grid-template-columns: minmax(0, 1fr); gap: 10px; align-content: start; padding: 16px 16px 12px; }
+#accounts.cards .id { min-height: 50px; }
+#accounts.cards .rank { min-height: 72px; }
+#accounts.cards .detail { min-height: 28px; padding-top: 10px; border-top: 1px solid rgba(200, 170, 110, .1); }
 #accounts.cards .acts { padding: 0 16px 14px; }
 #accounts.cards .open { flex: 1; }
 
 /* Rows: one line per account, in columns. */
 #accounts.rows .account { align-items: center; }
-#accounts.rows .go { grid-template-columns: auto minmax(120px, 1fr) minmax(190px, 1fr) minmax(0, 1.2fr); gap: 16px; align-items: center; padding: 10px 8px 10px 14px; }
+#accounts.rows .go { grid-template-columns: minmax(150px, 1fr) minmax(206px, 1fr) minmax(0, 1.2fr); gap: 16px; align-items: center; padding: 6px 8px 6px 14px; }
+#accounts.rows .crest { --emblem: 66px; }
+#accounts.rows .rank { gap: 5px 10px; }
 #accounts.rows .rank-line b { font-size: 13.5px; }
 /* A row's details keep to one line: what does not fit whole is left out
    rather than cut, and a note takes whatever room remains. */
 #accounts.rows .detail { flex-wrap: wrap; align-content: flex-start; height: 1.45em; }
 #accounts.rows .detail .key { flex: none; }
 #accounts.rows .detail .note { flex: 1 1 0; min-width: 6ch; }
-#accounts.rows .crest { width: 52px; height: 52px; margin: -8px -6px; }
 #accounts.rows .acts { padding-right: 12px; }
 
 /* Reordering: the held one floats under the pointer, the others make room. */
@@ -597,7 +601,7 @@ button.working::after {
 /* ---- forms (settings, wizard, security) ---- */
 .form { display: flex; flex-direction: column; gap: 12px; max-width: 560px; }
 /* Pages made of several cards lay them out side by side when there is room. */
-.form.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; max-width: 1040px; }
+.form.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; align-content: start; gap: 16px; max-width: 1040px; }
 .form.cols > :not(.card) { grid-column: 1 / -1; }
 .form label { display: grid; gap: 6px; color: var(--mist); font-size: 12px; letter-spacing: .025em; }
 .form .row { display: flex; gap: 8px; }
@@ -608,6 +612,8 @@ legend { padding: 0 8px; color: #b8a882; font: 700 10.5px/1.3 var(--display); le
 .hint { margin: 0; color: var(--mist); font-size: 12px; letter-spacing: .015em; }
 .hint.error { color: var(--rose-soft); }
 .hint:empty { display: none; }
+/* Whose the game and its art are, where the version is shown. */
+.hint.legal { max-width: 720px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--hair); font-size: 11.5px; }
 
 .step { display: flex; flex-direction: column; gap: 12px; animation: view-in .18s var(--ease); }
 .step p, .step ol { margin: 0; }
@@ -714,17 +720,15 @@ legend { padding: 0 8px; color: #b8a882; font: 700 10.5px/1.3 var(--display); le
   .track-who { width: 120px; }
 }
 
-/* ---- the face of an account: its icon with the crest in the corner ---- */
+/* ---- the face of an account: its profile icon ---- */
 .portrait { position: relative; display: grid; place-items: center; flex: none; }
+.portrait:not(.pictured) { display: none; }
 /* Round, in a ring of the tier's metal, as the client frames a summoner. */
-.portrait img { width: 48px; height: 48px; border-radius: 50%; display: block; box-shadow: 0 0 0 2px color-mix(in srgb, var(--tier) 70%, var(--brass-deep)), 0 0 0 3px var(--night); }
-.portrait.pictured { margin-right: 12px; margin-bottom: 8px; }
-/* Set into the corner a little smaller, so the picture is still a picture. */
-.portrait.pictured .crest { position: absolute; width: 58px; height: 58px; right: -26px; bottom: -26px; margin: 0; filter: drop-shadow(0 2px 5px rgba(0, 0, 0, .75)); }
-#accounts.cards .portrait { grid-area: crest; }
-#accounts.rows .portrait img { width: 38px; height: 38px; }
-#accounts.rows .portrait.pictured { margin-right: 10px; margin-bottom: 4px; }
-#accounts.rows .portrait.pictured .crest { width: 48px; height: 48px; right: -22px; bottom: -18px; }
+.portrait img { width: 44px; height: 44px; margin: 3px; border-radius: 50%; display: block; box-shadow: 0 0 0 2px color-mix(in srgb, var(--tier) 70%, var(--brass-deep)), 0 0 0 3px var(--night); }
+#accounts.rows .portrait img { width: 36px; height: 36px; }
+/* In rows, once any account has a face, the others keep its place empty so
+   the names stay in one column. */
+#accounts.rows:has(.pictured) .portrait:not(.pictured) { display: block; width: 42px; height: 42px; }
 
 /* ---- the question about the internet ---- */
 .banner.ask { align-items: flex-start; padding-block: 14px; border-color: transparent; border-image: linear-gradient(to top, var(--brass-dark), var(--brass-deep)) 1; }
@@ -776,15 +780,17 @@ button.glyph:disabled svg { animation: turning .9s linear infinite; }
   .titlebar, .banner { margin-inline: 16px; }
   main { padding-inline: 16px 6px; }
   #message { left: 16px; right: 16px; }
-  #filter { min-width: 84px; }
+  #filter { min-width: 76px; }
   .seg button { padding: 0 6px; letter-spacing: .04em; }
   .tools { gap: 6px; }
-  .tools select { max-width: 104px; padding-left: 8px; }
+  /* Room for the longest of the short sort names ("Seviyeye göre"). */
+  .tools select { max-width: 118px; padding: 0 24px 0 8px; background-position: right 7px center; }
   #add { padding-inline: 12px; }
   .roomy { display: none; }
   .tight { display: inline; }
   /* And a row is who, where it stands, and the button. */
-  #accounts.rows .go { grid-template-columns: auto minmax(110px, 1.3fr) minmax(164px, 1fr); gap: 12px; padding-left: 12px; }
+  #accounts.rows .go { grid-template-columns: minmax(130px, 1.3fr) minmax(176px, 1fr); gap: 12px; padding-left: 12px; }
+  #accounts.rows .crest { --emblem: 58px; }
   #accounts.rows .detail { display: none; }
   #accounts.rows .rank-line b { font-size: 12.5px; letter-spacing: .03em; }
   #accounts.rows .alt { padding: 0 8px; }

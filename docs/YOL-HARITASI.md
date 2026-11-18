@@ -175,6 +175,7 @@ Sıra, neyin neye bağlı olduğuna göre kuruldu. 0.6.0 tek büyük yama olarak
 |---|---|---|---|
 | **0.6.0** | İnternet | B12, B1, B2 (kısmen), B8 (kısmen), B9, C1, F1, A1, internet kapısı ve bağlantı kaydı | Yayında |
 | **0.6.1** | Görünüm | League istemcisinin renkleri ve çerçeve dili: lacivert-siyah zemin, altın çerçeve, hextech turkuazı, büyük harfli serif başlıklar, köşesiz kutular. Hepsi CSS ile çizilir; pakete Riot'tan tek dosya girmez | İşlev değişmedi; uygulama istemcinin bir parçası gibi durunca daha çok güven veriyor |
+| **0.6.2** | Amblemler | League istemcisinin özgün rank amblemleri: istemcinin kendi dosyaları, değiştirilmeden, kaynak adresi ve SHA-256 özetiyle (`ui/ranks/manifest.json`). Çizim armalar kaldırıldı; amblem rankın yanında, profil simgesi adın yanında. Ayarlar'da "Riot Games onaylamamıştır" notu | Arayüz istemciye benzeyince çizim armalar yabancı kaldı (karar 5) |
 | 0.6.x | Düzeltmeler | OP.GG biçimi canlıda farklı çıkarsa uyarlama; tanı paketinden görülen farklar | Varsayımlar gerçek istemcide ve canlı sayfada ilk kez sınanıyor |
 | 0.7.0 | VALORANT ve künye | B13 VALORANT rankı, B2'nin kalanı, B3 TFT, B4, B7 | VALORANT için gerçek istemcinin ne döndürdüğünü tanı paketinden görmek gerek |
 | 0.7.1 | Düzen | C3 gruplar, C7 çöp, B6 duo filtresi, C6 yayıncı modu, A15, C2, C4 | Çok hesabı olanlar için |
@@ -191,13 +192,14 @@ Hiçbir sürüme yazılmayanlar: A3, A13, F3.
 2. **Kilit: zorlaştırılmayacak** (E5). Uygulamanın amacı rahat ve hızlı giriş; kilit kapalıyken şifre çıkışı bugünkü gibi uyarıyla serbest kalır.
 3. **Oyun içi yardımcılar: alınmıyor** (G1, A14). Amaç dışı.
 4. **Kod imzalama: beklemede** (E7). Ücretli olduğu için şimdilik yok.
+5. **Rank amblemleri: Riot'un özgünleri.** 0.6.1'de arayüz League istemcisinin diline geçince çizim armalar yabancı kaldı; 0.6.2'den beri istemcinin kendi amblemleri pakette. Riot'tan alınan tek şey budur ve Riot'un topluluk projeleri politikasına (ücretsiz, ticari olmayan, bildirimli, geri alınabilir) dayanır; bildirim README'de ve Ayarlar'dadır.
 
 ## 7. Bilerek alınmayanlar
 
 - **Her girişte şifreyle girmek** (League Accounts'un ana yolu): oturum yöntemimiz daha hızlı ve captcha'ya takılmıyor.
 - **Yönetici olarak çalışmak** (Hextech Manager zorunlu tutuyor): gerekmiyor, saldırı yüzeyini büyütür.
 - **Şifreleri Credential Manager'a taşımak:** ana şifre katmanımızı desteklemez.
-- **Riot'un görselleri ve yazı tipleri** (League Accounts paketliyor): kendi çizimlerimizle devam. 0.6.1'den beri renkler ve çerçeveler League istemcisininkileri izliyor, ama armalar, simgeler ve arka plan bizim çizimimiz, başlıklar Windows'ta zaten bulunan bir yazı tipiyle yazılıyor.
+- **Riot'un yazı tipleri, arka planları ve düğme görselleri** (League Accounts paketliyor): alınmıyor. Renkler ve çerçeveler 0.6.1'den beri League istemcisininkileri izliyor ama CSS ile çizilir; başlıklar Windows'ta zaten bulunan bir yazı tipiyle yazılır. Tek istisna rank amblemleridir (karar 5).
 - **macOS ve Linux** (accshift): Riot Client'ın ve League'in olduğu yer Windows.
 - **Bildirim temizleme, arkadaş listesi, sohbet** (G2, G3).
 - **Kendiliğinden maç kabulü ve çevrimdışı görünme** (G1, A14): hesap değiştirmenin dışında.

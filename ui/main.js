@@ -376,94 +376,25 @@ function rankParts(rank) {
   return { tier, division, lp };
 }
 
-const SVG = "http://www.w3.org/2000/svg";
-
-// ---- crests --------------------------------------------------------------------
-// QuickSwitch's own mark for a rank: a hexagonal plate in the tier's metal,
-// with the division inside. What grows with the tier is the setting around
-// it, so the tier can be told at a glance without reading:
-//
-//   points  blades on the plate's corners: none for Iron, then one, two,
-//           a crown of three, four, and all six from Emerald on
-//   long    which of those are drawn long (the upright one from Diamond)
-//   bevel   a second line inside the plate, from Bronze
-//   edges   small blades between the corners, from Grandmaster
-//   rings   a halo around the whole, one for Master, two for Challenger
-//   glow    the crest lights the card behind it, from Diamond
-//
-// The metal itself is a gradient defined once in index.html (#metal-<tier>).
-const CRESTS = {
-  iron:        { points: [], long: [], bevel: false, edges: false, rings: 0, glow: false },
-  bronze:      { points: [0], long: [], bevel: true, edges: false, rings: 0, glow: false },
-  silver:      { points: [0, 3], long: [], bevel: true, edges: false, rings: 0, glow: false },
-  gold:        { points: [5, 0, 1], long: [0], bevel: true, edges: false, rings: 0, glow: false },
-  platinum:    { points: [5, 0, 1, 3], long: [0], bevel: true, edges: false, rings: 0, glow: false },
-  emerald:     { points: [0, 1, 2, 3, 4, 5], long: [], bevel: true, edges: false, rings: 0, glow: false },
-  diamond:     { points: [0, 1, 2, 3, 4, 5], long: [0, 3], bevel: true, edges: false, rings: 0, glow: true },
-  master:      { points: [0, 1, 2, 3, 4, 5], long: [0, 1, 2, 3, 4, 5], bevel: true, edges: false, rings: 1, glow: true },
-  grandmaster: { points: [0, 1, 2, 3, 4, 5], long: [0, 1, 2, 3, 4, 5], bevel: true, edges: true, rings: 1, glow: true },
-  challenger:  { points: [0, 1, 2, 3, 4, 5], long: [0, 1, 2, 3, 4, 5], bevel: true, edges: true, rings: 2, glow: true },
-};
-
-const CREST = { size: 56, mid: 28, plate: 13.5 };
-
-function svgNode(name, attrs) {
-  const node = document.createElementNS(SVG, name);
-  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
-  return node;
-}
-
-// A point `r` from the crest's middle, `degrees` clockwise from straight up.
-function crestPoint(r, degrees) {
-  const a = (degrees - 90) * Math.PI / 180;
-  return `${(CREST.mid + r * Math.cos(a)).toFixed(2)} ${(CREST.mid + r * Math.sin(a)).toFixed(2)}`;
-}
-
-const hexPath = (r) => `M${[0, 1, 2, 3, 4, 5].map((k) => crestPoint(r, k * 60)).join("L")}Z`;
-
-// A blade: a narrow triangle standing on the plate at `degrees`, its foot
-// tucked under the plate's edge, reaching `length` beyond `from`.
-function blade(from, degrees, length, half) {
-  return `M${crestPoint(from - 3, degrees - half)}L${crestPoint(from + length, degrees)}L${crestPoint(from - 3, degrees + half)}Z`;
-}
-
-// The crest for a rank ("Gold II 45 LP" in parts), or a dashed outline
-// when there is none.
-function crest(parts) {
-  const svg = svgNode("svg", { viewBox: `0 0 ${CREST.size} ${CREST.size}`, class: "crest", "aria-hidden": "true" });
-  const R = CREST.plate;
-  if (!parts) {
-    svg.append(svgNode("path", { class: "plate none", d: hexPath(R), "stroke-dasharray": "3 4" }));
-    return svg;
-  }
-  const tier = parts.tier.toLowerCase();
-  const spec = CRESTS[tier] || CRESTS.iron;
-  const metal = `url(#metal-${tier})`;
-  if (spec.glow) svg.classList.add("glow");
-
-  for (let ring = 0; ring < spec.rings; ring++) {
-    svg.append(svgNode("circle", { class: "ring", cx: CREST.mid, cy: CREST.mid, r: R + 7.5 + ring * 3.5, stroke: metal, "stroke-opacity": ring ? ".45" : ".8" }));
-  }
-  // Blades go under the plate, so only what stands clear of it shows.
-  const blades = [];
-  if (spec.edges) for (let k = 0; k < 6; k++) blades.push(blade(R * 0.866, k * 60 + 30, 6, 11));
-  for (const k of spec.points) blades.push(blade(R, k * 60, spec.long.includes(k) ? 11 : 6.5, 15));
-  if (blades.length) svg.append(svgNode("path", { class: "blades", d: blades.join(""), fill: metal }));
-
-  svg.append(svgNode("path", { class: "plate", d: hexPath(R), stroke: metal }));
-  if (spec.bevel) svg.append(svgNode("path", { class: "bevel", d: hexPath(R - 3.6), stroke: metal }));
-
-  if (parts.division) {
-    const text = svgNode("text", { x: CREST.mid, y: CREST.mid + 4.4, "text-anchor": "middle" });
-    text.textContent = parts.division;
-    svg.append(text);
-  } else {
-    // Above Diamond there are no divisions: a cut stone takes their place.
-    const m = CREST.mid;
-    svg.append(svgNode("path", { class: "stone", d: `M${m} ${m - 6.5}L${m + 5} ${m}L${m} ${m + 6.5}L${m - 5} ${m}Z`, fill: metal }));
-    svg.append(svgNode("path", { class: "stone-cut", d: `M${m - 5} ${m}H${m + 5}M${m} ${m - 6.5}V${m + 6.5}` }));
-  }
-  return svg;
+// ---- emblems -------------------------------------------------------------------
+// A rank is shown with the League client's own emblem for its tier, bundled
+// exactly as the client ships it (ui/ranks; manifest.json there says where
+// each file came from and what it must hash to). Riot draws one emblem per
+// tier, so the division is in the words beside it. The files are large
+// canvases with the emblem small in the middle, each tier at its own size:
+// style.css shows them all at one scale, so a higher tier is a bigger emblem,
+// as it is in the client. They belong to Riot Games; see README.
+function emblem(tier) {
+  const box = document.createElement("span");
+  box.className = "crest";
+  box.dataset.tier = tier;
+  const img = document.createElement("img");
+  img.src = `ranks/${tier}.png`;
+  img.alt = "";
+  img.draggable = false;
+  img.decoding = "async";
+  box.append(img);
+  return box;
 }
 
 function row(a, i) {
@@ -548,6 +479,10 @@ function row(a, i) {
   // Up to Diamond a division is a hundred points; above it the points only grow.
   fill.style.setProperty("--lp", rank ? (rank.division ? Math.min(rank.lp, 100) / 100 : 1) : 0);
   bar.append(fill);
+  // The emblem: the tier's, or the unranked one for a League account that
+  // has a level and no rank. Where nothing is known, nothing is shown.
+  if (rank) standing.append(emblem(rank.tier.toLowerCase()));
+  else if (a.game !== "valorant" && a.level) standing.append(emblem("unranked"));
   standing.append(line, bar);
 
   const detail = document.createElement("span");
@@ -566,8 +501,7 @@ function row(a, i) {
   if (a.hotkey) part(hotkeyLabel(a.hotkey), "key");
   if (a.note) part(a.note, "note");
 
-  // The face of the account: its profile icon when we have the picture,
-  // with the crest set into its corner; the crest alone otherwise.
+  // The face of the account: its profile icon, when we have the picture.
   const portrait = document.createElement("span");
   portrait.className = "portrait";
   const picture = a.icon != null && iconPictures.get(a.icon);
@@ -579,8 +513,10 @@ function row(a, i) {
     portrait.classList.add("pictured");
     portrait.append(img);
   }
-  portrait.append(crest(rank));
-  go.append(portrait, who, standing, detail);
+  const id = document.createElement("span");
+  id.className = "id";
+  id.append(portrait, who);
+  go.append(id, standing, detail);
 
   const acts = document.createElement("span");
   acts.className = "acts";

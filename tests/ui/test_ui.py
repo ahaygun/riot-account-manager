@@ -8,6 +8,7 @@ in for it, so every screen can be exercised without Windows or Riot Client.
     python tests/ui/test_ui.py shots/     # also saves screenshots there
 """
 import asyncio
+import hashlib
 import json
 import pathlib
 import re
@@ -138,7 +139,7 @@ async def main():
         await page.click("#message-text")
         check("icons are asked for by number, once", await calls("icons") == [{"numbers": [4567]}], str(await calls("icons")))
         check("an account with a picture wears it", await page.locator('#accounts .account[data-id="ana"] .portrait.pictured img').count() == 1)
-        check("one without keeps its crest alone", await page.locator('#accounts .account[data-id="smurf"] .portrait img').count() == 0)
+        check("one without shows no face", await page.locator('#accounts .account[data-id="smurf"] .portrait img').count() == 0 and await page.is_hidden('#accounts .account[data-id="smurf"] .portrait'))
         check("wins, losses and the rate are on the card", "120G 98M %55" in await text('#accounts .account[data-id="ana"]'))
         check("where the rank came from is a hover away", "OP.GG" in (await page.get_attribute('#accounts .account[data-id="ana"] .rank .line, #accounts .account[data-id="ana"] [title*="OP.GG"]', "title") or ""))
         check("a Riot ID that is not there is flagged", "Riot ID bulunamadı" in await text('#accounts .account[data-id="eski"]'))
@@ -159,10 +160,17 @@ async def main():
         check("each account carries its tier", tiers == ["gold", "diamond", "", "master"], str(tiers))
         fills = await page.eval_on_selector_all("#accounts .account .lp i", "els => els.map(e => e.style.getPropertyValue('--lp'))")
         check("the bar under the rank follows the points", fills == ["0.45", "0.03", "0", "1"], str(fills))
-        crests = await page.eval_on_selector_all("#accounts .account .crest", "els => els.map(e => [e.querySelectorAll('.blades').length, e.querySelectorAll('.ring').length, e.classList.contains('glow'), e.querySelector('text') ? e.querySelector('text').textContent : ''])")
-        check("a crest grows with its tier: blades, then a glow, then a ring", crests == [[1, 0, False, "II"], [1, 0, True, "IV"], [0, 0, False, ""], [1, 1, True, ""]], str(crests))
-        metals = await page.eval_on_selector_all("#accounts .account .crest .plate:not(.none)", "els => els.map(e => e.getAttribute('stroke'))")
-        check("each crest is drawn in its own metal, and that metal exists", metals == ["url(#metal-gold)", "url(#metal-diamond)", "url(#metal-master)"] and await page.evaluate("['gold','diamond','master','iron','challenger'].every(t => document.getElementById('metal-' + t))"), str(metals))
+        emblems = await page.eval_on_selector_all("#accounts .account", "els => els.map(e => { const img = e.querySelector('.rank .crest img'); return img ? [img.getAttribute('src'), img.complete && img.naturalWidth > 0] : null; })")
+        check("each ranked account wears its tier's emblem, and one with nothing known wears none", emblems == [["ranks/gold.png", True], ["ranks/diamond.png", True], None, ["ranks/master.png", True]], str(emblems))
+        shown = await page.eval_on_selector_all("#accounts .account .crest", "els => els.map(e => { const b = e.getBoundingClientRect(), i = e.querySelector('img').getBoundingClientRect(); return b.width >= 80 && i.width > b.width * 3 && i.left < b.left && i.right > b.right && getComputedStyle(e).overflow === 'hidden'; })")
+        check("an emblem is the middle of its canvas, not the whole canvas shrunk", all(shown) and len(shown) == 3, str(shown))
+        # The files are Riot's, bundled unchanged: each must be exactly what the manifest says.
+        ranks = UI / "ranks"
+        listed = json.loads((ranks / "manifest.json").read_text(encoding="utf-8"))["files"]
+        wrong = [f["file"] for f in listed if not (ranks / f["file"]).is_file() or (ranks / f["file"]).stat().st_size != f["bytes"] or hashlib.sha256((ranks / f["file"]).read_bytes()).hexdigest() != f["sha256"]]
+        check("every bundled emblem is byte for byte the file its manifest names", not wrong and sorted(f["file"] for f in listed) == sorted(p.name for p in ranks.glob("*.png")), str(wrong))
+        tiers = await page.evaluate("Promise.all([...TIERS, 'unranked'].map(t => new Promise(done => { const i = emblem(t).querySelector('img'); i.onload = () => done([t, i.naturalWidth >= 500]); i.onerror = () => done([t, false]); })))")
+        check("there is an emblem for every tier and for none, and each one loads", len(tiers) == 11 and all(ok for _, ok in tiers) and sorted(t + ".png" for t, _ in tiers) == sorted(f["file"] for f in listed), str(tiers))
         check("the open account is said to be open", "Açık" in await text("#accounts .account.active"))
         check("an account in both games offers both", await page.eval_on_selector_all("#accounts .account:nth-child(2) .acts .alt", "els => els.map(e => e.textContent)") == ["League", "VALORANT"])
         widths = await page.eval_on_selector_all("#accounts .account .name > span:first-child", "els => els.map(e => e.scrollWidth <= e.clientWidth + 1)")
@@ -432,7 +440,7 @@ async def main():
         await shot("smallest")
         await page.set_viewport_size({"width": 1080, "height": 700})
 
-        # ---- the theme keeps the window's promise: nothing from outside, nothing of Riot's
+        # ---- the theme keeps the window's promise: nothing comes from outside
         style = (UI / "style.css").read_text(encoding="utf-8")
         drawn = re.findall(r"url\(\s*[\"']?([^\"')]*)", style)
         check("the stylesheet ships no font, and every picture in it is drawn in it", "@font-face" not in style and "@import" not in style and drawn and all(u.startswith("data:image/svg+xml,") for u in drawn), str([u[:40] for u in drawn]))

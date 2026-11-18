@@ -52,7 +52,8 @@ Maç açıkken geçiş yapılmaz; **Maç bitince geç** ile sıraya alınabilir.
 ## Listede görünenler
 
 - Riot ID, tek/çift sıralama ligi ve seviye: League istemcisi o hesapla açıkken okunur ve hatırlanır. Güncel rank açıksa (aşağıda) hesaba girmeden de güncellenir; galibiyet, mağlubiyet ve kazanma oranı da görünür. Rankın üstüne gelince nereden ve ne zaman alındığı yazar.
-- **Profil simgesi:** hesabın League'deki simgesi, rank arması köşesinde olacak şekilde gösterilir.
+- **Profil simgesi:** hesabın League'deki simgesi adının yanında gösterilir.
+- **Rank amblemi:** her lig, League istemcisinin kendi amblemiyle gösterilir.
 - **Riot ID bulunamadı:** OP.GG'de bu Riot ID bu bölgede yok. Hesap ayarlarından Riot ID'yi ve bölgeyi düzelt.
 - **N gündür açılmadı:** hesabın oturumu en az 7 gündür kullanılmadı. Riot kullanılmayan oturumları bir süre sonra sonlandırır; süreyi açıklamaz. Hesaba geçince oturum hâlâ geçerliyse uyarı kalkar. Eşik `config.json` içindeki `stale_after_days` ile değişir, 0 uyarıyı kapatır.
 - **ban: N gün / kalıcı ban:** Riot son girişte bu hesap için League banı bildirdi. Giriş yine yapılır; ban bitene kadar oyun açılırsa bağlantı kesilir. Hesaba banı kalkmış halde girince etiket kalkar.
@@ -132,5 +133,7 @@ Riot bir güncellemede dosya ya da süreç adlarını değiştirirse `config.jso
 
 QuickSwitch, Riot Games tarafından onaylanmamıştır ve Riot Games ya da Riot Games mülklerinin üretiminde ya da yönetiminde resmî olarak yer alan kimseyin görüşlerini yansıtmaz. Riot Games, League of Legends ve VALORANT, Riot Games, Inc.'in ticari markalarıdır.
 
-Kaynak kod, ne yaptığını herkes görebilsin diye açıktır. Bir lisansla dağıtılmaz: tüm hakları saklıdır. Kodu incelemek serbesttir; kopyalamak, değiştirmek ya da dağıtmak için izin gerekir.
+Rank amblemleri (`ui/ranks/` altındaki PNG dosyaları) Riot Games'e aittir; bütün hakları Riot Games'indir. League istemcisinin kendi dosyalarıdır ve değiştirilmeden paketlenir; her dosyanın alındığı adres, boyutu ve SHA-256 özeti `ui/ranks/manifest.json` içindedir, arayüz testi dosyaları bu listeyle karşılaştırır. QuickSwitch, Riot Games'in "Legal Jibber Jabber" politikasına dayanarak, Riot Games'e ait görseller kullanılarak hazırlanmıştır; Riot Games bu projeyi onaylamaz ve desteklemez. Bu izin Riot'un politikasındaki koşullara bağlıdır (ücretsiz ve ticari olmayan kullanım) ve Riot tarafından geri alınabilir; geri alınırsa amblemlerin kaldırılması gerekir. Uygulamadaki diğer her şey (simgeler, çerçeveler, arka plan) QuickSwitch'in kendi çizimidir; Riot'un yazı tipleri ve başka görselleri kullanılmaz.
+
+Kaynak kod, ne yaptığını herkes görebilsin diye açıktır. Bir lisansla dağıtılmaz: tüm hakları saklıdır (Riot Games'e ait amblemler bunun dışındadır). Kodu incelemek serbesttir; kopyalamak, değiştirmek ya da dağıtmak için izin gerekir.
 

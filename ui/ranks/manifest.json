@@ -1,0 +1,94 @@
+{
+  "owner": "Riot Games, Inc. All rights reserved.",
+  "note": "League of Legends ranked emblems, as the League client ships them (client patch 16.20, read through CommunityDragon). The files are unchanged: not resized, cropped or re-encoded. tests/ui/test_ui.py checks every file against this list.",
+  "files": [
+    {
+      "file": "unranked.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-shared-components/global/default/unranked.png",
+      "width": 500,
+      "height": 500,
+      "bytes": 8506,
+      "sha256": "61fe51ce1fa9fd83acbbbcd8c88bb78f8a0ca350551d0cc9dcffd91e32f89066"
+    },
+    {
+      "file": "iron.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-static-assets/global/default/ranked-emblem/emblem-iron.png",
+      "width": 1280,
+      "height": 720,
+      "bytes": 36989,
+      "sha256": "c453391cd7c8b5b5db4b0d753bf81d6168bcb3c81246961add83b7e7f01c4230"
+    },
+    {
+      "file": "bronze.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-static-assets/global/default/ranked-emblem/emblem-bronze.png",
+      "width": 1280,
+      "height": 720,
+      "bytes": 61626,
+      "sha256": "253003087e8c10cb6fffd5c33cc06d31d7b45917bb0ca634e8c951deb39c36f3"
+    },
+    {
+      "file": "silver.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-static-assets/global/default/ranked-emblem/emblem-silver.png",
+      "width": 1280,
+      "height": 720,
+      "bytes": 102717,
+      "sha256": "e71dc2b8ccf5673f4a65b9db95657bbf9e2b880b24112a6fac71b6492f1d99de"
+    },
+    {
+      "file": "gold.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-static-assets/global/default/ranked-emblem/emblem-gold.png",
+      "width": 1280,
+      "height": 720,
+      "bytes": 90452,
+      "sha256": "23a35bc7d693de49e049749c2f0d0921f2c8e7c65181d615e58a2ab6e3a47b77"
+    },
+    {
+      "file": "platinum.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-static-assets/global/default/ranked-emblem/emblem-platinum.png",
+      "width": 2560,
+      "height": 1440,
+      "bytes": 249115,
+      "sha256": "75af4a0c4e16d343761098a0b706aa086b7083b84af93401ca1e3f1c1a556340"
+    },
+    {
+      "file": "emerald.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-static-assets/global/default/ranked-emblem/emblem-emerald.png",
+      "width": 2560,
+      "height": 1440,
+      "bytes": 251487,
+      "sha256": "69d218bdc84c51c1eada2edd399b8b245df0c0d80c19f54f6c9e72dfe9afcd1c"
+    },
+    {
+      "file": "diamond.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-static-assets/global/default/ranked-emblem/emblem-diamond.png",
+      "width": 1280,
+      "height": 720,
+      "bytes": 82008,
+      "sha256": "24ef7b706ab6bf9c4ba508b830317e1a2efd82fa9c69d710bfc4c01b7d6fab1f"
+    },
+    {
+      "file": "master.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-static-assets/global/default/ranked-emblem/emblem-master.png",
+      "width": 1280,
+      "height": 720,
+      "bytes": 92028,
+      "sha256": "22118c65f4d0ee3e2776067ba57e295a566010705e8b80b6e2ba3e5191b8d287"
+    },
+    {
+      "file": "grandmaster.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-static-assets/global/default/ranked-emblem/emblem-grandmaster.png",
+      "width": 1280,
+      "height": 720,
+      "bytes": 110760,
+      "sha256": "cb016209c335961cc56469a97c0a3cdc9c7203d13546e766e87f76523f9196c0"
+    },
+    {
+      "file": "challenger.png",
+      "url": "https://raw.communitydragon.org/16.20/plugins/rcp-fe-lol-static-assets/global/default/ranked-emblem/emblem-challenger.png",
+      "width": 1280,
+      "height": 720,
+      "bytes": 111694,
+      "sha256": "a0bce03a7c884d9342eed3a674a9ec27bd0881d45565a9ed1fa34c0a27196b56"
+    }
+  ]
+}
