@@ -40,6 +40,14 @@ const LEAGUE_PATHS: [&str; 7] = [
     "/lol-patch/v1/products/league_of_legends/state",
 ];
 
+/// Whether a key is an id (an account, a session, a season) rather than a
+/// name. Riot's ids are UUIDs and long hex strings: long, and full of
+/// digits, which the names of fields are not.
+fn id_like(key: &str) -> bool {
+    let key = key.trim_start_matches(['-', ' ']).trim_matches(['"', '\'']);
+    key.len() >= 16 && key.bytes().filter(u8::is_ascii_digit).count() >= 4
+}
+
 /// The shape of `value`: keys kept, values replaced by what kind they are.
 pub(super) fn shape(key: &str, value: &Value) -> Value {
     match value {
@@ -64,12 +72,24 @@ pub(super) fn shape(key: &str, value: &Value) -> Value {
         },
         Value::Object(map) => {
             // A map keyed by ids (accounts, seasons, sessions) would spell those ids out.
-            let ids = map.len() > 1 && map.keys().all(|k| k.len() >= 16);
+            let ids = map.len() > 1 && map.keys().all(|k| id_like(k));
             if ids {
                 let first = map.values().next().map(|v| shape("", v)).unwrap_or(json!("null"));
                 return json!({ "map of": map.len(), "each like": first });
             }
-            Value::Object(map.iter().map(|(k, v)| (k.clone(), shape(k, v))).collect::<Map<_, _>>())
+            // An id among names is put in its place one by one, even alone.
+            let mut ids_seen = 0;
+            let mut out = Map::new();
+            for (k, v) in map {
+                let shown = if id_like(k) {
+                    ids_seen += 1;
+                    format!("(id {ids_seen})")
+                } else {
+                    k.clone()
+                };
+                out.insert(shown, shape(k, v));
+            }
+            Value::Object(out)
         }
     }
 }
@@ -86,6 +106,7 @@ fn yaml_outline(text: &str) -> Vec<String> {
             let pad = " ".repeat(indent);
             match body.split_once(':') {
                 Some((key, value)) if !key.contains(' ') || key.starts_with('-') => {
+                    let key = if id_like(key) { "(id)" } else { key };
                     let value = value.trim().trim_matches('"');
                     if value.is_empty() {
                         format!("{pad}{key}:")
@@ -236,6 +257,28 @@ mod tests {
         assert_eq!(s["map of"], 2);
         assert!(s["each like"]["tier"] == "GOLD" || s["each like"]["tier"] == "IRON");
         assert!(!s.to_string().contains("b639ec2f") && !s.to_string().contains("aaaaaaaa"));
+    }
+
+    #[test]
+    fn an_id_is_not_spelled_out_even_when_it_is_the_only_key() {
+        // One account, one session: a map with a single id for a key.
+        let one = json!({ "b639ec2f-e2a0-509a-85f2-ffbec2526938": { "tier": "GOLD" } });
+        let s = shape("", &one).to_string();
+        assert!(!s.contains("b639ec2f"), "{s}");
+        assert!(s.contains("GOLD"), "the shape inside is still told: {s}");
+        // Ordinary long key names are not mistaken for ids.
+        let named = json!({ "persistLoginEnabled": true, "lol_blue_essence": 3 });
+        let n = shape("", &named);
+        assert_eq!(n["persistLoginEnabled"], "bool");
+        assert_eq!(n["lol_blue_essence"], "number");
+    }
+
+    #[test]
+    fn a_settings_file_key_that_is_an_id_is_not_spelled_out() {
+        let file = "accounts:\n    b639ec2f-e2a0-509a-85f2-ffbec2526938:\n        region: \"TR\"\n";
+        let outline = yaml_outline(file).join("\n");
+        assert!(!outline.contains("b639ec2f"), "{outline}");
+        assert!(outline.contains("accounts:") && outline.contains("region: text(2)"), "{outline}");
     }
 
     #[test]
