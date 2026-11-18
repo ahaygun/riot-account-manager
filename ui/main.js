@@ -324,32 +324,90 @@ function rankParts(rank) {
 
 const SVG = "http://www.w3.org/2000/svg";
 
-// The crest: a hexagon in the tier's colour, the division inside it. Above
-// Diamond there are no divisions; a small mark takes their place.
+// ---- crests --------------------------------------------------------------------
+// QuickSwitch's own mark for a rank: a hexagonal plate in the tier's metal,
+// with the division inside. What grows with the tier is the setting around
+// it, so the tier can be told at a glance without reading:
+//
+//   points  blades on the plate's corners: none for Iron, then one, two,
+//           a crown of three, four, and all six from Emerald on
+//   long    which of those are drawn long (the upright one from Diamond)
+//   bevel   a second line inside the plate, from Bronze
+//   edges   small blades between the corners, from Grandmaster
+//   rings   a halo around the whole, one for Master, two for Challenger
+//   glow    the crest lights the card behind it, from Diamond
+//
+// The metal itself is a gradient defined once in index.html (#metal-<tier>).
+const CRESTS = {
+  iron:        { points: [], long: [], bevel: false, edges: false, rings: 0, glow: false },
+  bronze:      { points: [0], long: [], bevel: true, edges: false, rings: 0, glow: false },
+  silver:      { points: [0, 3], long: [], bevel: true, edges: false, rings: 0, glow: false },
+  gold:        { points: [5, 0, 1], long: [0], bevel: true, edges: false, rings: 0, glow: false },
+  platinum:    { points: [5, 0, 1, 3], long: [0], bevel: true, edges: false, rings: 0, glow: false },
+  emerald:     { points: [0, 1, 2, 3, 4, 5], long: [], bevel: true, edges: false, rings: 0, glow: false },
+  diamond:     { points: [0, 1, 2, 3, 4, 5], long: [0, 3], bevel: true, edges: false, rings: 0, glow: true },
+  master:      { points: [0, 1, 2, 3, 4, 5], long: [0, 1, 2, 3, 4, 5], bevel: true, edges: false, rings: 1, glow: true },
+  grandmaster: { points: [0, 1, 2, 3, 4, 5], long: [0, 1, 2, 3, 4, 5], bevel: true, edges: true, rings: 1, glow: true },
+  challenger:  { points: [0, 1, 2, 3, 4, 5], long: [0, 1, 2, 3, 4, 5], bevel: true, edges: true, rings: 2, glow: true },
+};
+
+const CREST = { size: 56, mid: 28, plate: 13.5 };
+
+function svgNode(name, attrs) {
+  const node = document.createElementNS(SVG, name);
+  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+  return node;
+}
+
+// A point `r` from the crest's middle, `degrees` clockwise from straight up.
+function crestPoint(r, degrees) {
+  const a = (degrees - 90) * Math.PI / 180;
+  return `${(CREST.mid + r * Math.cos(a)).toFixed(2)} ${(CREST.mid + r * Math.sin(a)).toFixed(2)}`;
+}
+
+const hexPath = (r) => `M${[0, 1, 2, 3, 4, 5].map((k) => crestPoint(r, k * 60)).join("L")}Z`;
+
+// A blade: a narrow triangle standing on the plate at `degrees`, its foot
+// tucked under the plate's edge, reaching `length` beyond `from`.
+function blade(from, degrees, length, half) {
+  return `M${crestPoint(from - 3, degrees - half)}L${crestPoint(from + length, degrees)}L${crestPoint(from - 3, degrees + half)}Z`;
+}
+
+// The crest for a rank ("Gold II 45 LP" in parts), or a dashed outline
+// when there is none.
 function crest(parts) {
-  const svg = document.createElementNS(SVG, "svg");
-  svg.setAttribute("viewBox", "0 0 40 44");
-  svg.setAttribute("class", "crest");
-  svg.setAttribute("aria-hidden", "true");
-  const hex = document.createElementNS(SVG, "path");
-  hex.setAttribute("class", "hex");
-  hex.setAttribute("d", "M20 2.5 36 11.75v20.5L20 41.5 4 32.25v-20.5z");
-  hex.setAttribute("stroke-width", parts ? "2" : "1.5");
-  hex.setAttribute("stroke-linejoin", "round");
-  if (!parts) hex.setAttribute("stroke-dasharray", "3 4");
-  svg.append(hex);
-  if (parts && parts.division) {
-    const text = document.createElementNS(SVG, "text");
-    text.setAttribute("x", "20");
-    text.setAttribute("y", "26.5");
-    text.setAttribute("text-anchor", "middle");
+  const svg = svgNode("svg", { viewBox: `0 0 ${CREST.size} ${CREST.size}`, class: "crest", "aria-hidden": "true" });
+  const R = CREST.plate;
+  if (!parts) {
+    svg.append(svgNode("path", { class: "plate none", d: hexPath(R), "stroke-dasharray": "3 4" }));
+    return svg;
+  }
+  const tier = parts.tier.toLowerCase();
+  const spec = CRESTS[tier] || CRESTS.iron;
+  const metal = `url(#metal-${tier})`;
+  if (spec.glow) svg.classList.add("glow");
+
+  for (let ring = 0; ring < spec.rings; ring++) {
+    svg.append(svgNode("circle", { class: "ring", cx: CREST.mid, cy: CREST.mid, r: R + 7.5 + ring * 3.5, stroke: metal, "stroke-opacity": ring ? ".45" : ".8" }));
+  }
+  // Blades go under the plate, so only what stands clear of it shows.
+  const blades = [];
+  if (spec.edges) for (let k = 0; k < 6; k++) blades.push(blade(R * 0.866, k * 60 + 30, 6, 11));
+  for (const k of spec.points) blades.push(blade(R, k * 60, spec.long.includes(k) ? 11 : 6.5, 15));
+  if (blades.length) svg.append(svgNode("path", { class: "blades", d: blades.join(""), fill: metal }));
+
+  svg.append(svgNode("path", { class: "plate", d: hexPath(R), stroke: metal }));
+  if (spec.bevel) svg.append(svgNode("path", { class: "bevel", d: hexPath(R - 3.6), stroke: metal }));
+
+  if (parts.division) {
+    const text = svgNode("text", { x: CREST.mid, y: CREST.mid + 4.4, "text-anchor": "middle" });
     text.textContent = parts.division;
     svg.append(text);
-  } else if (parts) {
-    const mark = document.createElementNS(SVG, "path");
-    mark.setAttribute("d", "M20 14l2.4 5.2 5.6.6-4.2 3.8 1.2 5.6L20 26.4l-5 2.8 1.2-5.6-4.2-3.8 5.6-.6z");
-    mark.setAttribute("fill", "currentColor");
-    svg.append(mark);
+  } else {
+    // Above Diamond there are no divisions: a cut stone takes their place.
+    const m = CREST.mid;
+    svg.append(svgNode("path", { class: "stone", d: `M${m} ${m - 6.5}L${m + 5} ${m}L${m} ${m + 6.5}L${m - 5} ${m}Z`, fill: metal }));
+    svg.append(svgNode("path", { class: "stone-cut", d: `M${m - 5} ${m}H${m + 5}M${m} ${m - 6.5}V${m + 6.5}` }));
   }
   return svg;
 }

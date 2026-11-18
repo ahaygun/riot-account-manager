@@ -204,10 +204,19 @@ main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 5px; bor
 }
 .account .go:active { transform: none; }
 
-/* The crest: a hexagon in the tier's colour with the division inside. */
-.crest { width: 40px; height: 44px; flex: none; color: var(--tier); }
-.crest text { fill: var(--paper); font: 600 13px var(--display); }
-.crest .hex { fill: color-mix(in srgb, var(--tier) 16%, transparent); stroke: currentColor; }
+/* The crest: a plate in the tier's metal with the division inside; the
+   setting around it grows with the tier (see CRESTS in main.js). */
+.defs { position: absolute; }
+.crest { width: 68px; height: 68px; margin: -10px -8px -10px -10px; flex: none; color: var(--tier); overflow: visible; }
+.crest .plate { fill: color-mix(in srgb, var(--tier) 20%, var(--night)); stroke-width: 2.2; stroke-linejoin: round; }
+.crest .plate.none { fill: none; stroke: var(--edge); stroke-width: 1.5; }
+.crest .bevel { fill: none; stroke-width: .9; stroke-opacity: .55; stroke-linejoin: round; }
+.crest .blades { stroke: var(--night); stroke-width: .6; stroke-linejoin: round; }
+.crest .ring { fill: none; stroke-width: 1.1; }
+.crest .stone-cut { fill: none; stroke: var(--night); stroke-width: .7; stroke-opacity: .55; }
+.crest text { fill: var(--paper); font: 700 11.5px var(--display); }
+/* From Diamond up the crest lights what is behind it. */
+.crest.glow { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--tier) 55%, transparent)); }
 
 .account .who { display: grid; gap: 1px; min-width: 0; }
 .account .name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font: 600 16px/1.3 var(--display); letter-spacing: -.01em; }
@@ -256,7 +265,7 @@ main::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 5px; bor
 /* Rows: one line per account, in columns. */
 #accounts.rows .account { align-items: center; }
 #accounts.rows .go { grid-template-columns: auto minmax(120px, 1.3fr) minmax(130px, 1fr) minmax(0, 1.2fr); gap: 16px; align-items: center; padding: 10px 8px 10px 14px; }
-#accounts.rows .crest { width: 32px; height: 36px; }
+#accounts.rows .crest { width: 52px; height: 52px; margin: -8px -6px; }
 #accounts.rows .acts { padding-right: 10px; }
 
 /* Reordering: the held one floats under the pointer, the others make room. */
