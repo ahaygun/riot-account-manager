@@ -6,12 +6,22 @@
 
    The rank emblems are Riot's own, bundled as the League client ships
    them (ui/ranks, with a manifest of where each came from). Nothing else
-   of Riot's is here: no fonts, no backdrops, no sprites. The display face
-   is a serif Windows already has, the backdrop is a gradient, every other
-   glyph is drawn below. The window still fetches nothing (see the content
-   security policy). Colour values follow the client's palette as
+   of Riot's is here: no fonts, no backdrops, no sprites. The typeface is
+   Montserrat (SIL Open Font License), bundled in ui/fonts with its
+   licence; the backdrop is a gradient, every other glyph is drawn below.
+   The window still fetches nothing (see the content security policy). Colour values follow the client's palette as
    Tariolle/LeagueAccounts (MIT) documents it. Motion uses transform and
    opacity only, so it costs nothing while idle. */
+/* One file holds every weight. It is in the package, so it is there before
+   the first paint: no fallback is shown first and nothing shifts. */
+@font-face {
+  font-family: "Montserrat";
+  src: url("fonts/Montserrat.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
 :root {
   --night: #010a13;      /* hextech black: the rail, the track, wells */
   --ink: #07111b;        /* window */
@@ -37,9 +47,10 @@
   --teal-frame-lit: linear-gradient(to top, #3097c6, #0ecaba 50%, #cdfafa);
   --ease: cubic-bezier(.2, .8, .2, 1);
   --click: cubic-bezier(.3, 1.6, .5, 1); /* slight overshoot, like a latch */
-  /* Headings: a serif every Windows has. Change the look of all of them here. */
-  --display: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
-  --text: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  /* Headings and running text, both Montserrat. Either can be changed
+     here alone; what follows the name is only for a file that failed to load. */
+  --display: "Montserrat", "Segoe UI", system-ui, sans-serif;
+  --text: "Montserrat", "Segoe UI", system-ui, sans-serif;
   color-scheme: dark;
 }
 
@@ -119,10 +130,10 @@ body::before {
 .status button {
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 6px 18px 6px 21px;
+  gap: 9px;
+  padding: 6px 16px 6px 21px;
   color: var(--mist);
-  font-size: 13px;
+  font-size: 12px;
   text-align: left;
 }
 /* Diamonds, as the client marks its choices. */
@@ -130,7 +141,9 @@ body::before {
 .status button[data-status="open"]::before { background: var(--mint); }
 .status button[data-status="attention"]::before, .status button[data-status="banned"]::before { background: var(--rose); }
 .status button[data-status="stale"]::before { background: var(--brass); }
-.status button span { flex: 1; }
+/* The count keeps its place; a label too long for the rail is cut short. */
+.status button span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status button b { flex: none; }
 .status button b { color: #b4a47d; font-weight: 400; font-size: 11px; font-variant-numeric: tabular-nums; }
 .status button:hover { color: var(--paper); background: rgba(200, 170, 110, .06); }
 .status button[aria-checked="true"] { color: var(--paper); background: rgba(200, 170, 110, .1); box-shadow: inset 2px 0 0 var(--brass); }

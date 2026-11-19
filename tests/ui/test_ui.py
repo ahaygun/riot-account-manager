@@ -442,8 +442,15 @@ async def main():
 
         # ---- the theme keeps the window's promise: nothing comes from outside
         style = (UI / "style.css").read_text(encoding="utf-8")
-        drawn = re.findall(r"url\(\s*[\"']?([^\"')]*)", style)
-        check("the stylesheet ships no font, and every picture in it is drawn in it", "@font-face" not in style and "@import" not in style and drawn and all(u.startswith("data:image/svg+xml,") for u in drawn), str([u[:40] for u in drawn]))
+        named = re.findall(r"url\(\s*[\"']?([^\"')]*)", style)
+        check("everything the stylesheet names is drawn in it or is the bundled font", "@import" not in style and named and all(u.startswith("data:image/svg+xml,") or u == "fonts/Montserrat.ttf" for u in named), str([u[:40] for u in named]))
+        # The font is somebody else's work under an open licence: bundled unchanged, with that licence.
+        fonts = UI / "fonts"
+        listed = json.loads((fonts / "manifest.json").read_text(encoding="utf-8"))["files"]
+        wrong = [f["file"] for f in listed if not (fonts / f["file"]).is_file() or (fonts / f["file"]).stat().st_size != f["bytes"] or hashlib.sha256((fonts / f["file"]).read_bytes()).hexdigest() != f["sha256"]]
+        check("the bundled font is byte for byte the file its manifest names, and its licence is beside it", not wrong and [f["file"] for f in listed] == ["Montserrat.ttf"] and "SIL Open Font License" in (fonts / "OFL.txt").read_text(encoding="utf-8"), str(wrong))
+        faces = await page.evaluate("document.fonts.ready.then(() => [...document.fonts].map(f => [f.family.replace(/\"/g, ''), f.status]))")
+        check("the page's text is set in it, loaded from the package", faces == [["Montserrat", "loaded"]] and any(u.endswith("/ui/fonts/Montserrat.ttf") for u in asked) and "Montserrat" in await page.evaluate("getComputedStyle(document.body).fontFamily") and "Montserrat" in await page.evaluate("getComputedStyle(document.querySelector('.titlebar h1')).fontFamily"), str(faces))
         outside = [u for u in asked if not u.startswith(("file:", "data:"))]
         check("the page asked for nothing outside itself", not outside, "; ".join(outside))
         check("corners are square and the brand keeps its own letters", await page.evaluate("getComputedStyle(document.querySelector('#accounts .account')).borderRadius") == "0px" and await page.inner_text("#rail .brand") == "QUICKSWITCH", await page.inner_text("#rail .brand"))

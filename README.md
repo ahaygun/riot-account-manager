@@ -135,5 +135,7 @@ QuickSwitch, Riot Games tarafından onaylanmamıştır ve Riot Games ya da Riot 
 
 Rank amblemleri (`ui/ranks/` altındaki PNG dosyaları) Riot Games'e aittir; bütün hakları Riot Games'indir. League istemcisinin kendi dosyalarıdır ve değiştirilmeden paketlenir; her dosyanın alındığı adres, boyutu ve SHA-256 özeti `ui/ranks/manifest.json` içindedir, arayüz testi dosyaları bu listeyle karşılaştırır. QuickSwitch, Riot Games'in "Legal Jibber Jabber" politikasına dayanarak, Riot Games'e ait görseller kullanılarak hazırlanmıştır; Riot Games bu projeyi onaylamaz ve desteklemez. Bu izin Riot'un politikasındaki koşullara bağlıdır (ücretsiz ve ticari olmayan kullanım) ve Riot tarafından geri alınabilir; geri alınırsa amblemlerin kaldırılması gerekir. Uygulamadaki diğer her şey (simgeler, çerçeveler, arka plan) QuickSwitch'in kendi çizimidir; Riot'un yazı tipleri ve başka görselleri kullanılmaz.
 
-Kaynak kod, ne yaptığını herkes görebilsin diye açıktır. Bir lisansla dağıtılmaz: tüm hakları saklıdır (Riot Games'e ait amblemler bunun dışındadır). Kodu incelemek serbesttir; kopyalamak, değiştirmek ya da dağıtmak için izin gerekir.
+Yazı tipi [Montserrat](https://github.com/JulietaUla/Montserrat)'tır (Montserrat Project Authors); SIL Açık Yazı Tipi Lisansı 1.1 ile dağıtılır. Dosya değiştirilmeden paketlenir (`ui/fonts/Montserrat.ttf`), lisans metni yanındadır (`ui/fonts/OFL.txt`), kaynağı ve SHA-256 özeti `ui/fonts/manifest.json` içindedir. Uygulama yazı tipini internetten indirmez.
+
+Kaynak kod, ne yaptığını herkes görebilsin diye açıktır. Bir lisansla dağıtılmaz: tüm hakları saklıdır (Riot Games'e ait amblemler ve kendi lisansıyla gelen Montserrat bunun dışındadır). Kodu incelemek serbesttir; kopyalamak, değiştirmek ya da dağıtmak için izin gerekir.
 
