@@ -53,6 +53,15 @@ struct Sim {
     page_looks: u32,
     /// Who the client signs in by itself while the typer is failing.
     signs_in_meanwhile: Option<(String, String)>,
+    /// Every stop that was asked for: which processes, and how many times
+    /// the client had been asked to quit by then.
+    kills: Vec<(Vec<String>, u32)>,
+    /// A Riot Client that starts by itself a moment after the quit, as one
+    /// started by a League client on its way out does.
+    comes_back: bool,
+    comes_back_at: Option<std::time::Instant>,
+    /// What was still running when the client was started.
+    launched_over: Vec<String>,
 }
 
 /// One object plays the processes, the local API and the keyboard, since
@@ -128,9 +137,19 @@ impl World {
 
 impl Procs for World {
     fn running(&self, names: &[String]) -> Vec<String> {
-        self.sim().running.iter().filter(|r| names.contains(r)).cloned().collect()
+        let mut s = self.sim();
+        if s.comes_back_at.is_some_and(|at| std::time::Instant::now() >= at) {
+            s.comes_back_at = None;
+            s.running = vec!["RiotClientServices.exe".into()];
+        }
+        s.running.iter().filter(|r| names.contains(r)).cloned().collect()
     }
     fn kill(&self, names: &[String]) {
+        {
+            let mut s = self.sim();
+            let quits = s.quits;
+            s.kills.push((names.to_vec(), quits));
+        }
         if self.sim().unkillable {
             return;
         }
@@ -144,7 +163,11 @@ impl Procs for World {
         if self.sim().elevated {
             return Err(io::Error::from_raw_os_error(740));
         }
-        self.sim().launches.push(args.to_vec());
+        {
+            let mut s = self.sim();
+            s.launched_over = s.running.clone();
+            s.launches.push(args.to_vec());
+        }
         self.boot();
         Ok(())
     }
@@ -185,6 +208,11 @@ impl ClientApi for World {
         }
         self.sim().quits += 1;
         self.stop(true);
+        let mut s = self.sim();
+        if s.comes_back {
+            s.comes_back = false;
+            s.comes_back_at = Some(std::time::Instant::now() + Duration::from_millis(40));
+        }
         true
     }
     fn start_product(&self, product: &str) -> bool {
@@ -545,6 +573,48 @@ fn a_password_only_account_waits_the_grace_out_before_typing() {
     assert_eq!(f.sw.await_login(&acc.id, None, &never).unwrap(), LoginOutcome::SignedIn);
     assert!(started.elapsed() >= Duration::from_millis(600), "the page gets its time: {:?}", started.elapsed());
     assert_eq!(f.w.sim().enters_again, 0, "a sign-in that goes through is left alone");
+}
+
+#[test]
+fn the_league_client_is_stopped_before_riot_client_is_asked_to_quit() {
+    let f = fixture("league-first");
+    two_accounts(&f);
+    f.sw.switch("ana-hesap", None).unwrap();
+    {
+        let mut s = f.w.sim();
+        s.running.extend(["LeagueClient.exe".to_string(), "LeagueClientUx.exe".to_string()]);
+        s.phase = Some("None".into()); // open, and not in a match or a queue
+        s.kills.clear();
+    }
+    let quits = f.w.sim().quits;
+    f.sw.switch("smurf", None).unwrap();
+    let s = f.w.sim();
+    let (first, quits_then) = s.kills.first().expect("something was stopped").clone();
+    assert!(first.iter().all(|n| n.starts_with("LeagueClient")) && !first.is_empty(), "only the League client: {first:?}");
+    assert_eq!(quits_then, quits, "and before Riot Client was asked to quit");
+    assert_eq!(s.quits, quits + 1, "which was still asked, so its session reached the disk");
+    assert!(s.launched_over.is_empty());
+    drop(s);
+    assert!(f.w.live_token().contains("B-1"));
+}
+
+#[test]
+fn a_riot_client_that_comes_back_after_the_close_is_stopped_before_the_new_one_starts() {
+    let mut f = fixture("comes-back");
+    two_accounts(&f);
+    f.sw.switch("ana-hesap", None).unwrap();
+    // Long enough for the ghost to appear after the close has been judged done.
+    f.sw.timing.settle = Duration::from_millis(200);
+    f.w.sim().comes_back = true;
+    f.sw.switch("smurf", None).unwrap();
+    {
+        let s = f.w.sim();
+        assert!(s.comes_back_at.is_none(), "the ghost did appear");
+        assert!(s.launched_over.is_empty(), "nothing of the old client was running at the start: {:?}", s.launched_over);
+    }
+    assert!(f.w.live_token().contains("B-1"), "the session put in place is the one the client started on");
+    assert_eq!(f.sw.await_login("smurf", None, &never).unwrap(), LoginOutcome::SignedIn);
+    assert_eq!(f.sw.view().unwrap().active.as_deref(), Some("smurf"));
 }
 
 #[test]

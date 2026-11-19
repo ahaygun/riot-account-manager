@@ -17,6 +17,8 @@ Son gözden geçirme: Kasım 2026. Kaynaklar aynı yöntemi kullanan açık kayn
 | Şifreli girişin neden geçmediği `/rso-authenticator/v1/authentication` ucundan okunur: `type: multifactor` doğrulama kodu, dolu `error` alanı ret (içinde "captcha" ya da "rate" geçiyorsa o) | League Accounts'un kaynak kodu (v3.5.0); biz gerçek istemcide görmedik | `api.rs` `auth_problem_from`, `switcher.rs` `await_login` |
 | League banı kimlik bilgisindeki `ban.restrictions` listesinde durur: `scope: lol`, `type: TIME_BAN` (`dat.expirationMillis`) ya da `PERMANENT_BAN` | League Accounts'un kaynak kodu; biz görmedik | `api.rs` `league_ban` |
 | Riot Client yönetici olarak çalışmaya ayarlıysa başlatma Windows hatası 740 ile reddedilir | Windows davranışı | `switcher.rs` `launch` |
+| Şifreyle girişten sonra istemci, başlatıldığı oyunu kendiliğinden açmaz | 19 Kasım 2026 tanı kaydı: iki denemede de açmadı | `switcher.rs` `confirm_signed_in` (`game_start_wait` sonra `start_product`) |
+| Riot Client'ı olmayan bir League istemcisi "Unknown Player" gösterir ya da kendi Riot Client'ını başlatır; hesap değişiminde bu, eski hesabın kalıntısının yeni istemcinin yanında çalışması demektir | **Varsayım.** Kullanıcı gözlemi (hesap değişiminde ara sıra "Unknown Player", o seferde istemci 42 sn cevap vermedi); nedenini gerçek istemcide doğrulamadık | `switcher.rs` `close_client` (League istemcisi önce durdurulur), `switch` (başlatmadan önce geri gelen süreç taraması) |
 
 ## İnternetten okunanlar (0.6.0)
 

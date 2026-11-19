@@ -192,6 +192,13 @@ pub struct Timing {
     pub net_gap: Duration,
 }
 
+/// A process of the League client, as opposed to Riot Client's own. The
+/// list of client processes can be edited in config.json, so they are told
+/// apart by name.
+fn is_league_client(name: &str) -> bool {
+    name.to_ascii_lowercase().starts_with("leagueclient")
+}
+
 impl Default for Timing {
     fn default() -> Self {
         Timing {
@@ -209,7 +216,10 @@ impl Default for Timing {
             page_hold: Duration::from_millis(1200),
             login_wait: Duration::from_secs(90),
             submit_retry: Duration::from_secs(5),
-            game_start_wait: Duration::from_secs(15),
+            // Seen on a real client: after a typed sign-in the game was not
+            // started both times, and fifteen seconds went by before it was
+            // asked for. Three is enough to see whether it starts by itself.
+            game_start_wait: Duration::from_secs(3),
             manual_wait: Duration::from_secs(600),
             net_gap: Duration::from_millis(1500),
         }
@@ -653,9 +663,33 @@ impl Switcher {
         if self.procs.running(names).is_empty() {
             return Ok(());
         }
+        // The League client goes first, and is simply stopped: it keeps no
+        // session of its own to write. Left to close with Riot Client, it
+        // can outlive it for a moment, and a League client without its
+        // Riot Client shows "Unknown Player" or starts a Riot Client of its
+        // own, into the middle of the switch.
+        let league: Vec<String> = names.iter().filter(|n| is_league_client(n)).cloned().collect();
+        if !self.procs.running(&league).is_empty() {
+            let start = Instant::now();
+            let gone = self.procs.kill_and_wait(&league, Duration::from_secs(5).min(self.timing.quit_timeout));
+            self.log(&format!("switch: League client stopped first, in {} ms{}", start.elapsed().as_millis(), if gone { "" } else { " (still there)" }));
+        }
         if self.api.quit() {
             let start = Instant::now();
+            let mut asked_again = false;
             while start.elapsed() < self.timing.quit_timeout && !self.procs.running(names).is_empty() {
+                // Half the time gone and still there: ask once more before
+                // giving up on a proper quit, which is what saves the session.
+                if !asked_again && start.elapsed() >= self.timing.quit_timeout / 2 {
+                    asked_again = true;
+                    let heard = self.api.quit();
+                    self.log(&format!(
+                        "switch: still closing after {} ms ({}); asked to quit again ({})",
+                        start.elapsed().as_millis(),
+                        self.procs.running(names).join(", "),
+                        if heard { "heard" } else { "no answer" }
+                    ));
+                }
                 std::thread::sleep(self.timing.poll.min(Duration::from_millis(100)));
             }
         }
@@ -920,10 +954,28 @@ impl Switcher {
         // `current` is cleared while the files are in flux, so nothing can
         // file one account's session under another.
         self.update(|state| state.current = None)?;
-        match &snap {
-            Some(snap) => snap.restore(&self.env.riot_games_dir, &cfg.session_paths)?,
-            // No saved session (password-only account): start signed out.
-            None => snapshot::clear(&self.env.riot_games_dir, &cfg.session_paths)?,
+        let place = || -> Result<()> {
+            match &snap {
+                Some(snap) => snap.restore(&self.env.riot_games_dir, &cfg.session_paths)?,
+                // No saved session (password-only account): start signed out.
+                None => snapshot::clear(&self.env.riot_games_dir, &cfg.session_paths)?,
+            }
+            Ok(())
+        };
+        place()?;
+        // Nothing of the old client may be alive when the new one starts.
+        // A part of it that came back after the close (a League client on
+        // its way out can start a Riot Client) would run on the old
+        // account beside the new one. It is stopped, and since it may have
+        // written its own session over ours, the files are put in place again.
+        let back = self.procs.running(&cfg.client_processes);
+        if !back.is_empty() {
+            self.log(&format!("switch: {} came back after the client was closed; stopped before starting", back.join(", ")));
+            if !self.procs.kill_and_wait(&cfg.client_processes, Duration::from_secs(3).min(self.timing.quit_timeout)) {
+                return Err(Error::StillRunning(self.procs.running(&cfg.client_processes)));
+            }
+            std::thread::sleep(self.timing.settle);
+            place()?;
         }
         self.update(|state| state.current = Some(account.id.clone()))?;
 
@@ -975,9 +1027,22 @@ impl Switcher {
         // 1. Wait for the client to answer at all.
         (self.on_step)("waiting", id);
         let start = Instant::now();
+        // A client that is slow to answer is said so in the log, with what
+        // is running, so that a slow start can be told from a stuck one.
+        let mut noted = 0;
         while self.api.login() == LoginState::Unknown {
             if cancelled() || start.elapsed() > t.boot_wait {
                 return Ok(LoginOutcome::Unknown);
+            }
+            let slow = (start.elapsed().as_secs() / 10) as u32;
+            if slow > noted {
+                noted = slow;
+                let running = self.procs.running(&cfg.client_processes);
+                self.log(&format!(
+                    "switch: no answer from the client {} s after launch; running: {}",
+                    start.elapsed().as_secs(),
+                    if running.is_empty() { "nothing".to_string() } else { running.join(", ") }
+                ));
             }
             std::thread::sleep(t.poll);
         }
@@ -1156,7 +1221,11 @@ impl Switcher {
     /// `from_saved`: the client signed in straight from the session we
     /// restored, so whoever is signed in is whoever that snapshot holds.
     fn confirm_signed_in(&self, id: &str, started: Option<Game>, typed: bool, from_saved: bool, cancelled: &dyn Fn() -> bool) -> Result<LoginOutcome> {
+        let asked = Instant::now();
         let seen = self.api.identity().unwrap_or_default();
+        if asked.elapsed() >= Duration::from_secs(1) {
+            self.log(&format!("switch: the client took {} ms to say who is signed in", asked.elapsed().as_millis()));
+        }
         let game = self.update_account(id, |acc, _| {
             if let (Some(mine), Some(theirs)) = (&acc.puuid, &seen.puuid) {
                 if !same_account(Some(mine), theirs) {
@@ -1185,9 +1254,23 @@ impl Switcher {
         if let (true, Some(process)) = (typed, game.client_process()) {
             let names = [process.to_string()];
             let start = Instant::now();
-            while self.procs.running(&names).is_empty() && !cancelled() {
+            loop {
+                if cancelled() {
+                    break;
+                }
+                if !self.procs.running(&names).is_empty() {
+                    self.log(&format!("switch: the game came up by itself {} ms after the sign-in", start.elapsed().as_millis()));
+                    break;
+                }
                 if start.elapsed() >= self.timing.game_start_wait {
-                    self.api.start_product(game.product());
+                    let asked = Instant::now();
+                    let heard = self.api.start_product(game.product());
+                    self.log(&format!(
+                        "switch: the game had not started {} ms after the sign-in; asked the client for it ({} in {} ms)",
+                        start.elapsed().as_millis(),
+                        if heard { "accepted" } else { "not accepted" },
+                        asked.elapsed().as_millis()
+                    ));
                     break;
                 }
                 std::thread::sleep(self.timing.poll);
